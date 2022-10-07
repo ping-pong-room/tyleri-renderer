@@ -1,0 +1,15 @@
+[package]
+name = "tyleri-renderer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+yarvk = { path = "../yarvk/yarvk" }
+float-ord = "0.3.2"
+derive_more = "0.99.17"
+rustc-hash = "1.1.0"
+parking_lot = "0.12.1"
+num_cpus = "1.13.1"
+raw-window-handle = "0.4.3"
+
+[dev-dependencies]
