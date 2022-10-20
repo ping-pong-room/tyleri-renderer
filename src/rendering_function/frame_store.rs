@@ -70,7 +70,7 @@ impl FrameStore {
                         >::record_render_pass_continue_buffers(
                             std::mem::take(&mut self.secondary_command_buffers),
                             self.inheritance_info.clone(),
-                            |mut secondary_buffers| {
+                            |secondary_buffers| {
                                 // set viewport and scissors
                                 secondary_buffers.iter_mut().for_each(|secondary_buffer| {
                                     secondary_buffer.cmd_set_viewport(&Viewport {

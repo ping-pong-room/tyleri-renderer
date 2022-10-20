@@ -1,6 +1,5 @@
-use crate::rendering_function::frame_store::FrameStore;
 use crate::rendering_function::RenderingFunction;
-use crate::QueueManager;
+use crate::{Allocator, QueueManager};
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
 use yarvk::command::command_buffer::Level::{PRIMARY, SECONDARY};
@@ -21,12 +20,11 @@ use yarvk::render_pass::subpass::{SubpassDependency, SubpassDescription};
 use yarvk::render_pass::RenderPass;
 use yarvk::semaphore::Semaphore;
 use yarvk::swapchain::Swapchain;
-use yarvk::{
-    AccessFlags, AttachmentLoadOp, AttachmentStoreOp, ClearColorValue, ClearDepthStencilValue,
-    ClearValue, ComponentMapping, ComponentSwizzle, ContinuousImage, Format, Handle,
-    ImageAspectFlags, ImageLayout, SampleCountFlags, SUBPASS_EXTERNAL,
-};
+use yarvk::{AccessFlags, AttachmentLoadOp, AttachmentStoreOp, ClearColorValue, ClearDepthStencilValue, ClearValue, ComponentMapping, ComponentSwizzle, ContinuousImage, Format, Handle, ImageAspectFlags, ImageLayout, ImageTiling, ImageType, ImageUsageFlags, MemoryPropertyFlags, SampleCountFlags, SUBPASS_EXTERNAL};
+use yarvk::physical_device::SharingMode;
 use yarvk::pipeline::{Pipeline, PipelineBuilder, PipelineLayout};
+use crate::allocator::MemoryBindingBuilder;
+use crate::rendering_function::frame_store::FrameStore;
 
 pub struct ForwardRenderingFunction {
     render_pass: Arc<RenderPass>,
@@ -39,7 +37,7 @@ impl ForwardRenderingFunction {
     pub(crate) fn new(
         swapchain: &Swapchain,
         queue_manager: &mut QueueManager,
-        depth_image_view: Arc<ImageView>,
+        allocator: &mut Allocator,
     ) -> Result<Self, yarvk::Result> {
         let device = &swapchain.device;
         let present_images = swapchain.get_swapchain_images();
@@ -62,7 +60,7 @@ impl ForwardRenderingFunction {
                     .format(Format::D16_UNORM)
                     .samples(SampleCountFlags::TYPE_1)
                     .load_op(AttachmentLoadOp::CLEAR)
-                    .initial_layout(ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+                    .initial_layout(ImageLayout::UNDEFINED)
                     .final_layout(ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
                     .build(),
             )
@@ -96,6 +94,31 @@ impl ForwardRenderingFunction {
         let frame_stores = present_images
             .iter()
             .map(|image| {
+                // depth image
+                let depth_image = ContinuousImage::builder(device.clone())
+                    .image_type(ImageType::TYPE_2D)
+                    .format(Format::D16_UNORM)
+                    .extent(surface_resolution.into())
+                    .mip_levels(1)
+                    .array_layers(1)
+                    .samples(SampleCountFlags::TYPE_1)
+                    .tiling(ImageTiling::OPTIMAL)
+                    .usage(ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
+                    .sharing_mode(SharingMode::EXCLUSIVE)
+                    .build_and_bind(allocator, MemoryPropertyFlags::DEVICE_LOCAL, false)?;
+
+                let depth_image_view = ImageView::builder(depth_image.clone())
+                    .subresource_range(
+                        ImageSubresourceRange::builder()
+                            .aspect_mask(ImageAspectFlags::DEPTH)
+                            .level_count(1)
+                            .layer_count(1)
+                            .build(),
+                    )
+                    .format(depth_image.image_create_info.format)
+                    .view_type(ImageViewType::Type2d)
+                    .build()?;
+
                 let image_view = ImageView::builder(image.clone())
                     .view_type(ImageViewType::Type2d)
                     .format(surface_format.format)
@@ -211,8 +234,8 @@ impl RenderingFunction for ForwardRenderingFunction {
         Ok(())
     }
 
-    fn pipeline_builder(&self, layout: Arc<PipelineLayout>, subpass: u32) -> PipelineBuilder {
+    fn pipeline_builder(&self, layout: Arc<PipelineLayout>, _subpass: u32) -> PipelineBuilder {
         Pipeline::builder(layout)
-            .render_pass(self.render_pass.clone(), subpass)
+            .render_pass(self.render_pass.clone(), 0)
     }
 }

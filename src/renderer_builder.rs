@@ -1,4 +1,4 @@
-use crate::allocator::{Allocator, MemoryBindingBuilder};
+use crate::allocator::{Allocator};
 use crate::queue_manager::QueueManager;
 
 use crate::Renderer;
@@ -19,19 +19,16 @@ use yarvk::instance::{ApplicationInfo, Instance};
 use yarvk::physical_device::{PhysicalDevice, SharingMode};
 
 use crate::rendering_function::forward_rendering_function::ForwardRenderingFunction;
-use yarvk::barrier::ImageMemoryBarrier;
+
 use yarvk::device::Device;
-use yarvk::image_subresource_range::ImageSubresourceRange;
-use yarvk::image_view::{ImageView, ImageViewType};
-use yarvk::pipeline::pipeline_stage_flags::PipelineStageFlags;
+
+
+
 use yarvk::surface::Surface;
 use yarvk::swapchain::Swapchain;
 use yarvk::window::enumerate_required_extensions;
 use yarvk::{
-    AccessFlags, CompositeAlphaFlagsKHR, ContinuousImage, DebugUtilsMessageSeverityFlagsEXT,
-    DependencyFlags, Extent2D, Format, ImageAspectFlags, ImageLayout, ImageTiling, ImageType,
-    ImageUsageFlags, MemoryPropertyFlags, PhysicalDeviceType, PresentModeKHR, QueueFlags,
-    SampleCountFlags, SurfaceTransformFlagsKHR,
+    CompositeAlphaFlagsKHR, DebugUtilsMessageSeverityFlagsEXT, Extent2D, PhysicalDeviceType, PresentModeKHR, QueueFlags, SurfaceTransformFlagsKHR,
 };
 
 pub struct RendererBuilder {
@@ -146,18 +143,15 @@ impl RendererBuilder {
         let device = queue_manager.get_device();
         let mut allocator = Allocator::new(device.clone());
         let swapchain = create_swapchain(device.clone(), surface, resolution)?;
-        let depth_image_view =
-            create_depth_image(&mut allocator, &mut queue_manager, swapchain.image_extent)?;
         let forward_rendering_function = ForwardRenderingFunction::new(
             &swapchain,
             &mut queue_manager,
-            depth_image_view.clone(),
+            &mut allocator,
         )?;
         Ok(Renderer {
             queue_manager,
             swapchain,
             allocator,
-            depth_image_view,
             forward_rendering_function,
         })
     }
@@ -208,65 +202,5 @@ pub(crate) fn create_swapchain(
         .present_mode(present_mode)
         .clipped()
         .image_array_layers(1)
-        .build()
-}
-
-pub(crate) fn create_depth_image(
-    allocator: &mut Allocator,
-    queue_manager: &mut QueueManager,
-    resolution: Extent2D,
-) -> Result<Arc<ImageView>, yarvk::Result> {
-    let device = allocator.device.clone();
-    let depth_image = ContinuousImage::builder(device.clone())
-        .image_type(ImageType::TYPE_2D)
-        .format(Format::D16_UNORM)
-        .extent(resolution.into())
-        .mip_levels(1)
-        .array_layers(1)
-        .samples(SampleCountFlags::TYPE_1)
-        .tiling(ImageTiling::OPTIMAL)
-        .usage(ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
-        .sharing_mode(SharingMode::EXCLUSIVE)
-        .build_and_bind(allocator, MemoryPropertyFlags::DEVICE_LOCAL, true)?;
-
-    // change memory layout
-    let mut queue = queue_manager.take_present_queue_priority_low().unwrap();
-    queue.simple_record(|command_buffer| {
-        command_buffer.cmd_pipeline_barrier(
-            &[PipelineStageFlags::BottomOfPipe],
-            &[PipelineStageFlags::LateFragmentTests],
-            DependencyFlags::empty(),
-            &[],
-            &[],
-            &[ImageMemoryBarrier::builder(depth_image.clone())
-                .dst_access_mask(
-                    AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
-                        | AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-                )
-                .new_layout(ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
-                .old_layout(ImageLayout::UNDEFINED)
-                .subresource_range(
-                    ImageSubresourceRange::builder()
-                        .aspect_mask(ImageAspectFlags::DEPTH)
-                        .layer_count(1)
-                        .level_count(1)
-                        .build(),
-                )
-                .build()],
-        );
-        Ok(())
-    })?;
-    queue_manager.push_queue(queue);
-
-    ImageView::builder(depth_image.clone())
-        .subresource_range(
-            ImageSubresourceRange::builder()
-                .aspect_mask(ImageAspectFlags::DEPTH)
-                .level_count(1)
-                .layer_count(1)
-                .build(),
-        )
-        .format(depth_image.image_create_info.format)
-        .view_type(ImageViewType::Type2d)
         .build()
 }

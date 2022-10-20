@@ -10,7 +10,7 @@ use yarvk::command::command_buffer::CommandBuffer;
 use yarvk::command::command_buffer::Level::SECONDARY;
 use yarvk::command::command_buffer::RenderPassScope::INSIDE;
 use yarvk::command::command_buffer::State::RECORDING;
-use yarvk::image_view::ImageView;
+
 use yarvk::pipeline::{PipelineBuilder, PipelineLayout};
 use yarvk::Extent2D;
 
@@ -31,7 +31,6 @@ pub struct Renderer {
     pub queue_manager: QueueManager,
     pub swapchain: Swapchain,
     pub allocator: Allocator,
-    pub depth_image_view: Arc<ImageView>,
     forward_rendering_function: ForwardRenderingFunction,
 }
 
@@ -62,25 +61,17 @@ impl Renderer {
             self.swapchain.surface.clone(),
             resolution,
         )?;
-        self.depth_image_view =
-            create_depth_image(&mut self.allocator, &mut self.queue_manager, resolution)?;
         self.forward_rendering_function = ForwardRenderingFunction::new(
             &self.swapchain,
             &mut self.queue_manager,
-            self.depth_image_view.clone(),
+            &mut self.allocator,
         )?;
         Ok(())
     }
-    pub fn pipeline_builder(
+    pub fn forward_rendering_pipeline_builder(
         &self,
-        rendering_type: RenderingFunctionType,
         layout: Arc<PipelineLayout>,
-        subpass: u32,
     ) -> PipelineBuilder {
-        match rendering_type {
-            RenderingFunctionType::ForwardRendering => {
-                self.forward_rendering_function.pipeline_builder(layout, subpass)
-            }
-        }
+        self.forward_rendering_function.pipeline_builder(layout, 0)
     }
 }
