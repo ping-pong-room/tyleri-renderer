@@ -12,6 +12,8 @@ use yarvk::queue::submit_info::{SubmitInfo, SubmitResult, Submittable};
 use yarvk::render_pass::render_pass_begin_info::RenderPassBeginInfo;
 use yarvk::semaphore::Semaphore;
 use yarvk::swapchain::{PresentInfo, Swapchain};
+use crate::render_resource::texture::TextureSamplerUpdateInfo;
+use crate::unlimited_descriptor_pool::UnlimitedDescriptorPool;
 
 pub(crate) struct FrameStore {
     pub(crate) renderpass_begin_info: RenderPassBeginInfo,
@@ -26,6 +28,7 @@ pub(crate) struct FrameStore {
 impl FrameStore {
     pub fn record<
         F: FnOnce(
+            &UnlimitedDescriptorPool<TextureSamplerUpdateInfo>,
             &mut [CommandBuffer<{ SECONDARY }, { RECORDING }, { INSIDE }, true>],
         ) -> Result<(), yarvk::Result>,
     >(
@@ -33,6 +36,7 @@ impl FrameStore {
         swapchain: &mut Swapchain,
         present_queue: &mut Queue,
         image: &ContinuousImage,
+        texture_sampler_descriptor_pool: &UnlimitedDescriptorPool<TextureSamplerUpdateInfo>,
         f: F,
     ) -> Result<(), yarvk::Result> {
         let (signaled_fence, mut submit_result) = self.fence.take().unwrap().wait()?;
@@ -86,7 +90,7 @@ impl FrameStore {
                                         ..Default::default()
                                     });
                                 });
-                                f(secondary_buffers)
+                                f(texture_sampler_descriptor_pool, secondary_buffers)
                             },
                         )?;
                         primary_command_buffer.cmd_execute_commands(&mut secondary_buffers);

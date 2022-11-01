@@ -1,4 +1,4 @@
-use crate::allocator::{Allocator};
+use crate::allocator::Allocator;
 use crate::queue_manager::QueueManager;
 
 use crate::Renderer;
@@ -22,18 +22,24 @@ use crate::rendering_function::forward_rendering_function::ForwardRenderingFunct
 
 use yarvk::device::Device;
 
+use crate::render_resource::texture::TextureSamplerUpdateInfo;
+use crate::unlimited_descriptor_pool::UnlimitedDescriptorPool;
 
 
+
+use yarvk::sampler::Sampler;
 use yarvk::surface::Surface;
 use yarvk::swapchain::Swapchain;
 use yarvk::window::enumerate_required_extensions;
 use yarvk::{
-    CompositeAlphaFlagsKHR, DebugUtilsMessageSeverityFlagsEXT, Extent2D, PhysicalDeviceType, PresentModeKHR, QueueFlags, SurfaceTransformFlagsKHR,
+    CompositeAlphaFlagsKHR,
+    DebugUtilsMessageSeverityFlagsEXT, Extent2D, PhysicalDeviceType, PresentModeKHR, QueueFlags, SurfaceTransformFlagsKHR,
 };
 
 pub struct RendererBuilder {
     validation_level: Option<DebugUtilsMessageSeverityFlagsEXT>,
     vulkan_application_name: String,
+    sampler: Option<Arc<Sampler>>,
 }
 
 impl RendererBuilder {
@@ -41,6 +47,7 @@ impl RendererBuilder {
         Self {
             validation_level: None,
             vulkan_application_name: "Tyleri".to_string(),
+            sampler: None,
         }
     }
     pub fn enable_validation(mut self, level: DebugUtilsMessageSeverityFlagsEXT) -> Self {
@@ -49,6 +56,10 @@ impl RendererBuilder {
     }
     pub fn vulkan_application_name(mut self, name: String) -> Self {
         self.vulkan_application_name = name;
+        self
+    }
+    pub fn sampler(mut self, sampler: Arc<Sampler>) -> Self {
+        self.sampler = Some(sampler);
         self
     }
     fn device_score(physical_device: &PhysicalDevice) -> usize {
@@ -143,16 +154,18 @@ impl RendererBuilder {
         let device = queue_manager.get_device();
         let mut allocator = Allocator::new(device.clone());
         let swapchain = create_swapchain(device.clone(), surface, resolution)?;
-        let forward_rendering_function = ForwardRenderingFunction::new(
-            &swapchain,
-            &mut queue_manager,
-            &mut allocator,
-        )?;
+        let forward_rendering_function =
+            ForwardRenderingFunction::new(&swapchain, &mut queue_manager, &mut allocator)?;
+        let texture_sampler_descriptor_pool = UnlimitedDescriptorPool::new(
+            device.clone(),
+            TextureSamplerUpdateInfo::descriptor_layout(device.clone())?,
+        );
         Ok(Renderer {
             queue_manager,
             swapchain,
             allocator,
             forward_rendering_function,
+            texture_sampler_descriptor_pool,
         })
     }
 }

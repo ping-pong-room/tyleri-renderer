@@ -24,7 +24,9 @@ use yarvk::{AccessFlags, AttachmentLoadOp, AttachmentStoreOp, ClearColorValue, C
 use yarvk::physical_device::SharingMode;
 use yarvk::pipeline::{Pipeline, PipelineBuilder, PipelineLayout};
 use crate::allocator::MemoryBindingBuilder;
+use crate::render_resource::texture::TextureSamplerUpdateInfo;
 use crate::rendering_function::frame_store::FrameStore;
+use crate::unlimited_descriptor_pool::UnlimitedDescriptorPool;
 
 pub struct ForwardRenderingFunction {
     render_pass: Arc<RenderPass>,
@@ -221,16 +223,18 @@ impl ForwardRenderingFunction {
 impl RenderingFunction for ForwardRenderingFunction {
     fn record_next_frame<
         F: FnOnce(
+            &UnlimitedDescriptorPool<TextureSamplerUpdateInfo>,
             &mut [CommandBuffer<{ SECONDARY }, { RECORDING }, { INSIDE }, true>],
         ) -> Result<(), yarvk::Result>,
     >(
         &mut self,
         swapchain: &mut Swapchain,
         present_queue: &mut Queue,
+        texture_sampler_descriptor_pool: &UnlimitedDescriptorPool<TextureSamplerUpdateInfo>,
         f: F,
     ) -> Result<(), yarvk::Result> {
         let (frame_store, image) = self.acquire_next_image(swapchain)?;
-        frame_store.record(swapchain, present_queue, &image, f)?;
+        frame_store.record(swapchain, present_queue,  &image,texture_sampler_descriptor_pool, f)?;
         Ok(())
     }
 
