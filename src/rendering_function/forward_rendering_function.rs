@@ -1,5 +1,11 @@
+use crate::allocator::MemoryBindingBuilder;
+use crate::render_resource::texture::TextureSamplerUpdateInfo;
+use crate::rendering_function::frame_store::FrameStore;
 use crate::rendering_function::RenderingFunction;
+use crate::unlimited_descriptor_pool::UnlimitedDescriptorPool;
 use crate::{Allocator, QueueManager};
+use rayon::iter::IntoParallelRefIterator;
+use rayon::iter::ParallelIterator;
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
 use yarvk::command::command_buffer::Level::{PRIMARY, SECONDARY};
@@ -11,7 +17,9 @@ use yarvk::fence::Fence;
 use yarvk::frame_buffer::Framebuffer;
 use yarvk::image_subresource_range::ImageSubresourceRange;
 use yarvk::image_view::{ImageView, ImageViewType};
+use yarvk::physical_device::SharingMode;
 use yarvk::pipeline::pipeline_stage_flags::PipelineStageFlags;
+use yarvk::pipeline::{Pipeline, PipelineBuilder, PipelineLayout};
 use yarvk::queue::submit_info::SubmitResult;
 use yarvk::queue::Queue;
 use yarvk::render_pass::attachment::{AttachmentDescription, AttachmentReference};
@@ -20,13 +28,12 @@ use yarvk::render_pass::subpass::{SubpassDependency, SubpassDescription};
 use yarvk::render_pass::RenderPass;
 use yarvk::semaphore::Semaphore;
 use yarvk::swapchain::Swapchain;
-use yarvk::{AccessFlags, AttachmentLoadOp, AttachmentStoreOp, ClearColorValue, ClearDepthStencilValue, ClearValue, ComponentMapping, ComponentSwizzle, ContinuousImage, Format, Handle, ImageAspectFlags, ImageLayout, ImageTiling, ImageType, ImageUsageFlags, MemoryPropertyFlags, SampleCountFlags, SUBPASS_EXTERNAL};
-use yarvk::physical_device::SharingMode;
-use yarvk::pipeline::{Pipeline, PipelineBuilder, PipelineLayout};
-use crate::allocator::MemoryBindingBuilder;
-use crate::render_resource::texture::TextureSamplerUpdateInfo;
-use crate::rendering_function::frame_store::FrameStore;
-use crate::unlimited_descriptor_pool::UnlimitedDescriptorPool;
+use yarvk::{
+    AccessFlags, AttachmentLoadOp, AttachmentStoreOp, ClearColorValue, ClearDepthStencilValue,
+    ClearValue, ComponentMapping, ComponentSwizzle, ContinuousImage, Format, Handle,
+    ImageAspectFlags, ImageLayout, ImageTiling, ImageType, ImageUsageFlags, MemoryPropertyFlags,
+    SampleCountFlags, SUBPASS_EXTERNAL,
+};
 
 pub struct ForwardRenderingFunction {
     render_pass: Arc<RenderPass>,
@@ -156,7 +163,7 @@ impl ForwardRenderingFunction {
                         .allocate_command_buffer::<{ PRIMARY }>()?;
                 let primary_command_buffer_handle = primary_command_buffer.handle();
                 let secondary_command_buffers = [0..num_cpus::get()]
-                    .iter()
+                    .par_iter()
                     .map(|_| {
                         CommandPool::builder(present_queue_family.clone(), device.clone())
                             .build()
@@ -234,12 +241,17 @@ impl RenderingFunction for ForwardRenderingFunction {
         f: F,
     ) -> Result<(), yarvk::Result> {
         let (frame_store, image) = self.acquire_next_image(swapchain)?;
-        frame_store.record(swapchain, present_queue,  &image,texture_sampler_descriptor_pool, f)?;
+        frame_store.record(
+            swapchain,
+            present_queue,
+            &image,
+            texture_sampler_descriptor_pool,
+            f,
+        )?;
         Ok(())
     }
 
     fn pipeline_builder(&self, layout: Arc<PipelineLayout>, _subpass: u32) -> PipelineBuilder {
-        Pipeline::builder(layout)
-            .render_pass(self.render_pass.clone(), 0)
+        Pipeline::builder(layout).render_pass(self.render_pass.clone(), 0)
     }
 }

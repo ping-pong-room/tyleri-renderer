@@ -1,4 +1,4 @@
-use crate::queue_manager::recordable_queue::RecordableQueue;
+use crate::queue_manager::recordable_queue::{RecordableQueue, ThreadLocalSecondaryBufferMap};
 use float_ord::FloatOrd;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -77,41 +77,14 @@ impl QueueManager {
         let present_queues = queues.remove(present_queue_family).unwrap();
         let present_queues = present_queues
             .into_iter()
-            .map(|queue| {
-                let command_buffer =
-                    CommandPool::builder(queue.queue_family_property.clone(), device.clone())
-                        .build()
-                        .unwrap()
-                        .allocate_command_buffer::<{ PRIMARY }>()?;
-                let fence = Fence::new(device.clone())?;
-                Ok((
-                    FloatOrd(queue.priority),
-                    RecordableQueue {
-                        queue,
-                        command_buffer: Some(command_buffer),
-                        fence: Some(fence),
-                    },
-                ))
-            })
+            .map(|queue| Ok((FloatOrd(queue.priority), RecordableQueue::new(queue)?)))
             .collect::<Result<_, yarvk::Result>>()?;
         let present_queues = (present_queue_family.clone(), present_queues);
         let transfer_queues = if let Some(transfer_queue_family) = transfer_queue_family {
             let transfer_queues = queues.remove(transfer_queue_family).unwrap();
             let transfer_queues = transfer_queues
                 .into_iter()
-                .map(|queue| {
-                    let command_buffer =
-                        CommandPool::builder(queue.queue_family_property.clone(), device.clone())
-                            .build()
-                            .unwrap()
-                            .allocate_command_buffer::<{ PRIMARY }>()?;
-                    let fence = Fence::new(device.clone())?;
-                    Ok(RecordableQueue {
-                        queue,
-                        command_buffer: Some(command_buffer),
-                        fence: Some(fence),
-                    })
-                })
+                .map(|queue| RecordableQueue::new(queue))
                 .collect::<Result<Vec<_>, yarvk::Result>>()?;
             Some((transfer_queue_family.clone(), transfer_queues))
         } else {

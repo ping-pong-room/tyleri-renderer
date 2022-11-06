@@ -1,5 +1,7 @@
 #![feature(trait_upcasting)]
 #![feature(map_first_last)]
+#![feature(const_trait_impl)]
+#![feature(const_convert)]
 
 extern crate core;
 
@@ -18,7 +20,8 @@ use yarvk::command::command_buffer::State::RECORDING;
 
 use yarvk::pipeline::{PipelineBuilder, PipelineLayout};
 
-use yarvk::Extent2D;
+use yarvk::{Extent2D, SampleCountFlags};
+use yarvk::sampler::Sampler;
 
 pub mod allocator;
 pub mod queue_manager;
@@ -28,7 +31,7 @@ pub mod renderer_builder;
 pub mod rendering_function;
 pub mod unlimited_descriptor_pool;
 
-use crate::render_resource::texture::TextureSamplerUpdateInfo;
+use crate::render_resource::texture::{TextureAllocator, TextureSamplerUpdateInfo};
 use crate::rendering_function::forward_rendering_function::ForwardRenderingFunction;
 use crate::rendering_function::RenderingFunction;
 use crate::unlimited_descriptor_pool::UnlimitedDescriptorPool;
@@ -43,7 +46,9 @@ pub struct Renderer {
     pub swapchain: Swapchain,
     pub allocator: Allocator,
     forward_rendering_function: ForwardRenderingFunction,
-    pub texture_sampler_descriptor_pool: UnlimitedDescriptorPool<TextureSamplerUpdateInfo>,
+    default_sampler: Arc<Sampler>,
+    pub texture_allocator: TextureAllocator,
+    msaa_sample_counts: SampleCountFlags,
 }
 
 impl Renderer {
@@ -67,7 +72,7 @@ impl Renderer {
             .record_next_frame(
                 &mut self.swapchain,
                 &mut queue,
-                &self.texture_sampler_descriptor_pool,
+                &self.texture_allocator.descriptor_pool,
                 f,
             )
             .unwrap();

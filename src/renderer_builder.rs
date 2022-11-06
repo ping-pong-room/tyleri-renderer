@@ -3,6 +3,7 @@ use crate::queue_manager::QueueManager;
 
 use crate::Renderer;
 
+use float_ord::FloatOrd;
 use raw_window_handle::HasRawWindowHandle;
 use std::collections::BTreeMap;
 use std::ffi::CStr;
@@ -10,7 +11,7 @@ use std::sync::Arc;
 
 use yarvk::debug_utils_messenger::DebugUtilsMessengerCreateInfoEXT;
 
-use yarvk::device_features::PhysicalDeviceFeatures::GeometryShader;
+use yarvk::device_features::PhysicalDeviceFeatures::{GeometryShader, SamplerAnisotropy};
 
 use yarvk::entry::Entry;
 use yarvk::extensions::{PhysicalDeviceExtensionType, PhysicalInstanceExtensionType};
@@ -22,24 +23,23 @@ use crate::rendering_function::forward_rendering_function::ForwardRenderingFunct
 
 use yarvk::device::Device;
 
-use crate::render_resource::texture::TextureSamplerUpdateInfo;
+use crate::render_resource::texture::{TextureAllocator, TextureSamplerUpdateInfo};
 use crate::unlimited_descriptor_pool::UnlimitedDescriptorPool;
-
-
 
 use yarvk::sampler::Sampler;
 use yarvk::surface::Surface;
 use yarvk::swapchain::Swapchain;
 use yarvk::window::enumerate_required_extensions;
 use yarvk::{
-    CompositeAlphaFlagsKHR,
-    DebugUtilsMessageSeverityFlagsEXT, Extent2D, PhysicalDeviceType, PresentModeKHR, QueueFlags, SurfaceTransformFlagsKHR,
+    BorderColor, CompareOp, CompositeAlphaFlagsKHR, DebugUtilsMessageSeverityFlagsEXT, Extent2D,
+    Filter, PhysicalDeviceType, PresentModeKHR, QueueFlags, SampleCountFlags, SamplerAddressMode,
+    SamplerMipmapMode, SurfaceTransformFlagsKHR,
 };
 
 pub struct RendererBuilder {
     validation_level: Option<DebugUtilsMessageSeverityFlagsEXT>,
     vulkan_application_name: String,
-    sampler: Option<Arc<Sampler>>,
+    desire_sampler_anisotropy: Option<f32>,
 }
 
 impl RendererBuilder {
@@ -47,7 +47,7 @@ impl RendererBuilder {
         Self {
             validation_level: None,
             vulkan_application_name: "Tyleri".to_string(),
-            sampler: None,
+            desire_sampler_anisotropy: None,
         }
     }
     pub fn enable_validation(mut self, level: DebugUtilsMessageSeverityFlagsEXT) -> Self {
@@ -56,10 +56,6 @@ impl RendererBuilder {
     }
     pub fn vulkan_application_name(mut self, name: String) -> Self {
         self.vulkan_application_name = name;
-        self
-    }
-    pub fn sampler(mut self, sampler: Arc<Sampler>) -> Self {
-        self.sampler = Some(sampler);
         self
     }
     fn device_score(physical_device: &PhysicalDevice) -> usize {
@@ -110,6 +106,10 @@ impl RendererBuilder {
             Some(last) => Ok(Some(last.1)),
         }
     }
+    pub fn enable_anisotropy(mut self, max_sampler_anisotropy: f32) -> Self {
+        self.desire_sampler_anisotropy = Some(max_sampler_anisotropy);
+        self
+    }
     pub fn build(
         self,
         window: &dyn HasRawWindowHandle,
@@ -156,16 +156,69 @@ impl RendererBuilder {
         let swapchain = create_swapchain(device.clone(), surface, resolution)?;
         let forward_rendering_function =
             ForwardRenderingFunction::new(&swapchain, &mut queue_manager, &mut allocator)?;
-        let texture_sampler_descriptor_pool = UnlimitedDescriptorPool::new(
-            device.clone(),
-            TextureSamplerUpdateInfo::descriptor_layout(device.clone())?,
-        );
+        // create sampler
+        let mut sampler_builder = Sampler::builder(device.clone())
+            .mag_filter(Filter::LINEAR)
+            .min_filter(Filter::LINEAR)
+            .mipmap_mode(SamplerMipmapMode::LINEAR)
+            .address_mode_u(SamplerAddressMode::MIRRORED_REPEAT)
+            .address_mode_v(SamplerAddressMode::MIRRORED_REPEAT)
+            .address_mode_w(SamplerAddressMode::MIRRORED_REPEAT)
+            .border_color(BorderColor::FLOAT_OPAQUE_WHITE)
+            .compare_op(CompareOp::NEVER);
+        let device_limits = device
+            .physical_device
+            .get_physical_device_properties()
+            .limits;
+        // config for anisotropy
+        if let Some(desire_sampler_anisotropy) = self.desire_sampler_anisotropy {
+            if let Some(anisotropy_feature) = device.get_feature::<{ SamplerAnisotropy.into() }>() {
+                // make sure the desired anisotropy fits device's limitation
+                let device_max_sampler_anisotropy = device_limits.max_sampler_anisotropy;
+                sampler_builder = sampler_builder.max_anisotropy(
+                    std::cmp::min(
+                        FloatOrd(desire_sampler_anisotropy),
+                        FloatOrd(device_max_sampler_anisotropy),
+                    )
+                    .0,
+                    anisotropy_feature,
+                );
+            }
+        }
+        // config for multisampling
+        // use same sample counts for all framebuffer resources
+        let sample_counts = device_limits.framebuffer_color_sample_counts.as_raw()
+            & device_limits.framebuffer_depth_sample_counts.as_raw()
+            & device_limits.framebuffer_stencil_sample_counts.as_raw()
+            & device_limits
+                .framebuffer_no_attachments_sample_counts
+                .as_raw();
+        let msaa_sample_counts = if sample_counts & SampleCountFlags::TYPE_64.as_raw() != 0 {
+            SampleCountFlags::TYPE_64
+        } else if sample_counts & SampleCountFlags::TYPE_32.as_raw() != 0 {
+            SampleCountFlags::TYPE_32
+        } else if sample_counts & SampleCountFlags::TYPE_16.as_raw() != 0 {
+            SampleCountFlags::TYPE_16
+        } else if sample_counts & SampleCountFlags::TYPE_8.as_raw() != 0 {
+            SampleCountFlags::TYPE_8
+        } else if sample_counts & SampleCountFlags::TYPE_4.as_raw() != 0 {
+            SampleCountFlags::TYPE_4
+        } else if sample_counts & SampleCountFlags::TYPE_2.as_raw() != 0 {
+            SampleCountFlags::TYPE_2
+        } else {
+            SampleCountFlags::TYPE_1
+        };
+
+        let default_sampler = sampler_builder.build()?;
+        let texture_allocator = TextureAllocator::new(default_sampler.clone())?;
         Ok(Renderer {
             queue_manager,
             swapchain,
             allocator,
             forward_rendering_function,
-            texture_sampler_descriptor_pool,
+            default_sampler,
+            texture_allocator,
+            msaa_sample_counts,
         })
     }
 }
