@@ -5,10 +5,14 @@
 
 extern crate core;
 
-use crate::allocator::Allocator;
+use std::hash::BuildHasherDefault;
+use crate::memory_allocator::MemoryAllocator;
 use crate::queue_manager::QueueManager;
 use crate::renderer_builder::RendererBuilder;
 use std::sync::Arc;
+use dashmap::DashMap;
+use dashmap::mapref::one::{Ref, RefMut};
+use rustc_hash::FxHasher;
 
 use yarvk::swapchain::Swapchain;
 
@@ -23,7 +27,7 @@ use yarvk::pipeline::{PipelineBuilder, PipelineLayout};
 use yarvk::{Extent2D, SampleCountFlags};
 use yarvk::sampler::Sampler;
 
-pub mod allocator;
+pub mod memory_allocator;
 pub mod queue_manager;
 pub mod render_objects;
 pub mod render_resource;
@@ -37,6 +41,10 @@ use crate::rendering_function::RenderingFunction;
 use crate::unlimited_descriptor_pool::UnlimitedDescriptorPool;
 pub use renderer_builder::*;
 
+type FxDashMap<K, V> = DashMap<K, V,BuildHasherDefault<FxHasher>>;
+type FxRef<'a, K,V> = Ref<'a, K, V,BuildHasherDefault<FxHasher>>;
+type FxRefMut<'a, K,V> = RefMut<'a, K, V,BuildHasherDefault<FxHasher>>;
+
 pub enum RenderingFunctionType {
     ForwardRendering,
 }
@@ -44,7 +52,7 @@ pub enum RenderingFunctionType {
 pub struct Renderer {
     pub queue_manager: QueueManager,
     pub swapchain: Swapchain,
-    pub allocator: Allocator,
+    pub memory_allocator: Arc<MemoryAllocator>,
     forward_rendering_function: ForwardRenderingFunction,
     default_sampler: Arc<Sampler>,
     pub texture_allocator: TextureAllocator,
@@ -87,7 +95,7 @@ impl Renderer {
         self.forward_rendering_function = ForwardRenderingFunction::new(
             &self.swapchain,
             &mut self.queue_manager,
-            &mut self.allocator,
+            &mut self.memory_allocator,
         )?;
         Ok(())
     }

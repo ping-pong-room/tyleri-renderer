@@ -1,13 +1,14 @@
-use crate::allocator::MemoryBindingBuilder;
+use crate::memory_allocator::MemoryBindingBuilder;
 use crate::render_resource::texture::TextureSamplerUpdateInfo;
 use crate::rendering_function::frame_store::FrameStore;
 use crate::rendering_function::RenderingFunction;
 use crate::unlimited_descriptor_pool::UnlimitedDescriptorPool;
-use crate::{Allocator, QueueManager};
+use crate::{MemoryAllocator, QueueManager};
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
+use rayon::current_num_threads;
 use yarvk::command::command_buffer::Level::{PRIMARY, SECONDARY};
 use yarvk::command::command_buffer::RenderPassScope::INSIDE;
 use yarvk::command::command_buffer::State::RECORDING;
@@ -46,7 +47,7 @@ impl ForwardRenderingFunction {
     pub(crate) fn new(
         swapchain: &Swapchain,
         queue_manager: &mut QueueManager,
-        allocator: &mut Allocator,
+        allocator: &Arc<MemoryAllocator>,
     ) -> Result<Self, yarvk::Result> {
         let device = &swapchain.device;
         let present_images = swapchain.get_swapchain_images();
@@ -162,7 +163,7 @@ impl ForwardRenderingFunction {
                         .unwrap()
                         .allocate_command_buffer::<{ PRIMARY }>()?;
                 let primary_command_buffer_handle = primary_command_buffer.handle();
-                let secondary_command_buffers = [0..num_cpus::get()]
+                let secondary_command_buffers = [0..current_num_threads()]
                     .par_iter()
                     .map(|_| {
                         CommandPool::builder(present_queue_family.clone(), device.clone())

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use yarvk::pipeline::Pipeline;
 use yarvk::sampler::Sampler;
-use crate::allocator::{Buffer, Image};
+use crate::memory_allocator::{Buffer, Image};
 
 pub struct MeshRender {
     vertex_buffer: Arc<dyn Buffer>,

@@ -1,6 +1,6 @@
 use rayon::iter::IntoParallelRefMutIterator;
 use rayon::iter::ParallelIterator;
-use rustc_hash::{FxHashMap};
+use rustc_hash::FxHashMap;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use yarvk::descriptor::descriptor_pool::{DescriptorPool, DescriptorPoolCreateFlag};
@@ -10,7 +10,7 @@ use yarvk::descriptor::write_descriptor_sets::WriteDescriptorSets;
 use yarvk::device::Device;
 use yarvk::Handle;
 
-pub trait DescriptorUpdateInfo: Sync + Send {
+pub trait DescriptorUpdateInfo: Sync + Send + Clone {
     fn add_to_write_descriptor_set<'a>(
         &'a self,
         descriptor_set_index: usize,
@@ -49,10 +49,10 @@ impl<T: DescriptorUpdateInfo> SingleSetTypeDescriptorPool<T> {
             allocated_descriptors: Default::default(),
         })
     }
-    pub fn allocate(
-        &mut self,
-        descriptor_set_indices: &mut Vec<(usize, T)>,
-    ) -> Result<(), yarvk::Result> {
+    pub fn allocate<'a>(
+        &'a mut self,
+        descriptor_set_indices: &'a mut Vec<(usize, T)>,
+    ) -> Result<WriteDescriptorSets, yarvk::Result> {
         let mut allocatable = self.descriptor_pool.allocatable();
         for (descriptor_set_index, _) in descriptor_set_indices.iter() {
             allocatable = allocatable.add_descriptor_set_layout(
@@ -65,14 +65,10 @@ impl<T: DescriptorUpdateInfo> SingleSetTypeDescriptorPool<T> {
         for (descriptor_set_index, update_value) in descriptor_set_indices.iter() {
             update_value
                 .add_to_write_descriptor_set(*descriptor_set_index, &mut write_descriptor_sets);
-        }
-
-        write_descriptor_sets.par_update();
-        while let Some((descriptor_set_index, update_value)) = descriptor_set_indices.pop() {
             self.allocated_descriptors
-                .insert(descriptor_set_index, update_value);
+                .insert(*descriptor_set_index, update_value.clone());
         }
-        Ok(())
+        Ok(write_descriptor_sets)
     }
     pub fn free(&mut self, descriptor_set_indices: &[usize]) -> Result<(), yarvk::Result> {
         for index in descriptor_set_indices {
@@ -86,7 +82,7 @@ impl<T: DescriptorUpdateInfo> SingleSetTypeDescriptorPool<T> {
     }
 }
 
-struct BufferPoolWithIndexBuffer<T: DescriptorUpdateInfo> {
+struct PendingBufferPool<T: DescriptorUpdateInfo> {
     pool: SingleSetTypeDescriptorPool<T>,
     update_buffer: Vec<(usize, T)>,
     free_buffer: Vec<usize>,
@@ -99,11 +95,11 @@ pub struct UnlimitedDescriptorPool<T: DescriptorUpdateInfo> {
     // mapping descriptor index into descriptor pool index, used to lookup which pool this descriptor set belongs to.
     descriptor_set_indices: FxHashMap<usize, u64>,
     // pools that have free descriptor set slots.
-    not_full_pools: BTreeMap<u64, BufferPoolWithIndexBuffer<T>>,
+    not_full_pools: BTreeMap<u64, PendingBufferPool<T>>,
     // pools that are full, cannot allocate descriptor sets any more.
-    full_pools: BTreeMap<u64, BufferPoolWithIndexBuffer<T>>,
+    full_pools: BTreeMap<u64, PendingBufferPool<T>>,
     // a buffer used to hold pools temporary.
-    ready_to_go: BTreeMap<u64, BufferPoolWithIndexBuffer<T>>,
+    ready_to_go: BTreeMap<u64, PendingBufferPool<T>>,
 }
 
 impl<T: DescriptorUpdateInfo> UnlimitedDescriptorPool<T> {
@@ -114,7 +110,7 @@ impl<T: DescriptorUpdateInfo> UnlimitedDescriptorPool<T> {
             descriptor_set_indices: Default::default(),
             not_full_pools: Default::default(),
             full_pools: Default::default(),
-            ready_to_go: Default::default()
+            ready_to_go: Default::default(),
         }
     }
     // TODO do not unwrap
@@ -132,7 +128,7 @@ impl<T: DescriptorUpdateInfo> UnlimitedDescriptorPool<T> {
             .unwrap();
             self.not_full_pools.insert(
                 pool.descriptor_pool.handle(),
-                BufferPoolWithIndexBuffer {
+                PendingBufferPool {
                     pool,
                     update_buffer: Vec::with_capacity(max_set),
                     free_buffer: Vec::with_capacity(max_set),
@@ -140,14 +136,18 @@ impl<T: DescriptorUpdateInfo> UnlimitedDescriptorPool<T> {
             );
             self.prepare_allocate(&mut descriptor_indices);
         }
-        self.ready_to_go
+        let mut descriptor_wirtes = self
+            .ready_to_go
             .par_iter_mut()
-            .for_each(|(_, buffer_pool)| {
+            .map(|(_, buffer_pool)| {
                 buffer_pool
                     .pool
                     .allocate(&mut buffer_pool.update_buffer)
-                    .unwrap();
-            });
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        self.device
+            .par_update_descriptor_sets(&mut descriptor_wirtes);
         // put pools back to full vector or not full vector
         // only the last element can be not full
         if let Some((index, buffer_pool)) = self.ready_to_go.pop_first() {
@@ -164,10 +164,7 @@ impl<T: DescriptorUpdateInfo> UnlimitedDescriptorPool<T> {
             self.full_pools.insert(index, buffer_pool);
         }
     }
-    fn prepare_allocate<It: Iterator<Item = (usize, T)>>(
-        &mut self,
-        descriptor_indices: &mut It,
-    ) {
+    fn prepare_allocate<It: Iterator<Item = (usize, T)>>(&mut self, descriptor_indices: &mut It) {
         while let Some((index, mut buffer_pool)) = self.not_full_pools.pop_first() {
             let pool = &mut buffer_pool.pool;
             let buffer = &mut buffer_pool.update_buffer;

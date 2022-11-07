@@ -1,4 +1,4 @@
-use crate::allocator::{Buffer, Image};
+use crate::memory_allocator::{Buffer, Image};
 use derive_more::{Deref, DerefMut};
 use yarvk::device_memory::dedicated_memory::{DedicatedResource, MemoryDedicatedAllocateInfo};
 use yarvk::device_memory::State::Unbound;

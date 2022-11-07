@@ -1,4 +1,4 @@
-use crate::allocator::Allocator;
+use crate::memory_allocator::MemoryAllocator;
 use crate::queue_manager::QueueManager;
 
 use crate::Renderer;
@@ -23,7 +23,7 @@ use crate::rendering_function::forward_rendering_function::ForwardRenderingFunct
 
 use yarvk::device::Device;
 
-use crate::render_resource::texture::{TextureAllocator, TextureSamplerUpdateInfo};
+use crate::render_resource::texture::TextureAllocator;
 use crate::unlimited_descriptor_pool::UnlimitedDescriptorPool;
 
 use yarvk::sampler::Sampler;
@@ -152,10 +152,10 @@ impl RendererBuilder {
         let (pdevice, surface) = Self::choose_device(instance.clone(), &window)?.unwrap();
         let mut queue_manager = QueueManager::new(pdevice)?;
         let device = queue_manager.get_device();
-        let mut allocator = Allocator::new(device.clone());
+        let mut memory_allocator = Arc::new(MemoryAllocator::new(device.clone()));
         let swapchain = create_swapchain(device.clone(), surface, resolution)?;
         let forward_rendering_function =
-            ForwardRenderingFunction::new(&swapchain, &mut queue_manager, &mut allocator)?;
+            ForwardRenderingFunction::new(&swapchain, &mut queue_manager, &memory_allocator)?;
         // create sampler
         let mut sampler_builder = Sampler::builder(device.clone())
             .mag_filter(Filter::LINEAR)
@@ -210,11 +210,15 @@ impl RendererBuilder {
         };
 
         let default_sampler = sampler_builder.build()?;
-        let texture_allocator = TextureAllocator::new(default_sampler.clone())?;
+        let texture_allocator = TextureAllocator::new(
+            default_sampler.clone(),
+            msaa_sample_counts,
+            &memory_allocator,
+        )?;
         Ok(Renderer {
             queue_manager,
             swapchain,
-            allocator,
+            memory_allocator,
             forward_rendering_function,
             default_sampler,
             texture_allocator,

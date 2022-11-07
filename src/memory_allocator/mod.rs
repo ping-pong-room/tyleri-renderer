@@ -1,9 +1,11 @@
-use crate::allocator::block_allocator::BlockBasedAllocator;
-use crate::allocator::dedicated_resource::{DedicatedBuffer, DedicatedImage};
+use crate::memory_allocator::block_allocator::BlockBasedAllocator;
+use crate::memory_allocator::dedicated_resource::{DedicatedBuffer, DedicatedImage};
 
-use rustc_hash::FxHashMap;
-use std::collections::hash_map::Entry;
+use rustc_hash::{FxHashMap, FxHasher};
+use std::hash::BuildHasherDefault;
 
+use dashmap::mapref::entry::Entry;
+use dashmap::mapref::one::Ref;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
@@ -14,6 +16,7 @@ use yarvk::physical_device::memory_properties::MemoryType;
 
 use yarvk::physical_device::PhysicalDevice;
 
+use crate::{FxDashMap, FxRef, FxRefMut};
 use yarvk::{
     ContinuousBufferBuilder, ContinuousImageBuilder, Handle, MemoryPropertyFlags,
     MemoryRequirements,
@@ -68,7 +71,7 @@ pub trait MemoryBindingBuilder {
     type Ty;
     fn build_and_bind(
         self,
-        allocator: &mut Allocator,
+        allocator: &Arc<MemoryAllocator>,
         property_flags: MemoryPropertyFlags,
         dedicated: bool,
     ) -> Result<Self::Ty, yarvk::Result>;
@@ -79,7 +82,7 @@ impl MemoryBindingBuilder for ContinuousBufferBuilder {
 
     fn build_and_bind(
         self,
-        allocator: &mut Allocator,
+        allocator: &Arc<MemoryAllocator>,
         property_flags: MemoryPropertyFlags,
         dedicated: bool,
     ) -> Result<Self::Ty, yarvk::Result> {
@@ -106,7 +109,7 @@ impl MemoryBindingBuilder for ContinuousImageBuilder {
 
     fn build_and_bind(
         self,
-        allocator: &mut Allocator,
+        allocator: &Arc<MemoryAllocator>,
         property_flags: MemoryPropertyFlags,
         dedicated: bool,
     ) -> Result<Self::Ty, yarvk::Result> {
@@ -134,25 +137,22 @@ struct MemoryTypeIndex {
     property_flags: MemoryPropertyFlags,
 }
 
-pub struct Allocator {
+pub struct MemoryAllocator {
     pub device: Arc<Device>,
-    block_based_allocators: FxHashMap<u64 /*memory type handler*/, Arc<BlockBasedAllocator>>,
-    memory_type_map: FxHashMap<MemoryTypeIndex, MemoryType>,
+    block_based_allocators: FxDashMap<u64 /*memory type handler*/, Arc<BlockBasedAllocator>>,
+    memory_type_map: FxDashMap<MemoryTypeIndex, MemoryType>,
 }
 
-impl Allocator {
+impl MemoryAllocator {
     pub fn new(device: Arc<Device>) -> Self {
-        let allocators = FxHashMap::default();
+        let allocators = FxDashMap::default();
         Self {
             device,
             block_based_allocators: allocators,
             memory_type_map: Default::default(),
         }
     }
-    pub fn get_block_based_allocator(
-        &mut self,
-        memory_type: &MemoryType,
-    ) -> Arc<BlockBasedAllocator> {
+    pub fn get_block_based_allocator(&self, memory_type: &MemoryType) -> Arc<BlockBasedAllocator> {
         let allocator = self
             .block_based_allocators
             .entry(memory_type.handle())
@@ -163,11 +163,11 @@ impl Allocator {
         allocator.clone()
     }
 
-    pub fn get_memory_type<T: MemoryRequirement>(
-        &mut self,
+    fn get_memory_type<T: MemoryRequirement>(
+        &self,
         t: &T,
         property_flags: MemoryPropertyFlags,
-    ) -> Option<&MemoryType> {
+    ) -> Option<FxRefMut<MemoryTypeIndex, MemoryType>> {
         let memory_requirements = t.get_memory_requirements();
         let memory_type_index = MemoryTypeIndex {
             memory_type_bits: memory_requirements.memory_type_bits,
@@ -175,7 +175,7 @@ impl Allocator {
         };
 
         let memory_type = match self.memory_type_map.entry(memory_type_index) {
-            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Occupied(entry) => entry.into_ref(),
             Entry::Vacant(entry) => {
                 if let Some(memory_type) = Self::get_suitable_memory_type(
                     &self.device.physical_device,

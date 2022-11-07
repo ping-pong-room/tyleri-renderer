@@ -1,5 +1,5 @@
-use crate::allocator::block_allocator::chunk_manager::{BlockIndex, ChunkManager};
-use crate::allocator::{Buffer, Image};
+use crate::memory_allocator::block_allocator::chunk_manager::{BlockIndex, ChunkManager};
+use crate::memory_allocator::{Buffer, Image};
 use derive_more::{Deref, DerefMut};
 use parking_lot::RwLock;
 

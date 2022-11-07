@@ -1,11 +1,14 @@
-use crate::render_resource::texture::TextureSamplerUpdateInfo;
 use crate::unlimited_descriptor_pool::UnlimitedDescriptorPool;
 use dashmap::mapref::entry::Entry;
 use dashmap::mapref::one::{Ref, RefMut};
 use dashmap::{DashMap, DashSet};
 use derive_more::{Deref, DerefMut};
-use rayon::iter::IntoParallelIterator;
+use parking_lot::{Condvar, Mutex};
 use rayon::iter::ParallelIterator;
+use rayon::iter::{IntoParallelIterator, ParallelDrainRange};
+use rustc_hash::{FxHashMap, FxHasher};
+use std::collections::HashMap;
+use std::hash::BuildHasherDefault;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::thread::ThreadId;
@@ -21,8 +24,11 @@ use yarvk::queue::submit_info::{SubmitInfo, Submittable};
 use yarvk::queue::Queue;
 use yarvk::{Handle, Rect2D, SubpassContents, Viewport};
 
+#[derive(Deref, DerefMut)]
 pub struct ThreadLocalSecondaryBuffer {
     dirty: bool,
+    #[deref]
+    #[deref_mut]
     buffer: CommandBuffer<{ SECONDARY }, { RECORDING }, { OUTSIDE }, true>,
 }
 
@@ -30,8 +36,8 @@ pub struct ThreadLocalSecondaryBufferMap {
     queue_family: QueueFamilyProperties,
     device: Arc<Device>,
     command_buffer_inheritance_info: Pin<Arc<CommandBufferInheritanceInfo>>,
-    secondary_buffers: DashMap<ThreadId, ThreadLocalSecondaryBuffer>,
-    secondary_buffer_handles: DashMap<u64, ThreadId>,
+    secondary_buffers: DashMap<ThreadId, ThreadLocalSecondaryBuffer, BuildHasherDefault<FxHasher>>,
+    secondary_buffer_handles: DashMap<u64, ThreadId, BuildHasherDefault<FxHasher>>,
 }
 
 impl ThreadLocalSecondaryBufferMap {
@@ -44,10 +50,12 @@ impl ThreadLocalSecondaryBufferMap {
             secondary_buffer_handles: Default::default(),
         }
     }
-    pub fn get_thread_local_secondary_buffer(
+    fn get_thread_local_secondary_buffer(
         &self,
-    ) -> Result<RefMut<ThreadId,ThreadLocalSecondaryBuffer>, yarvk::Result>
-    {
+    ) -> Result<
+        RefMut<ThreadId, ThreadLocalSecondaryBuffer, BuildHasherDefault<FxHasher>>,
+        yarvk::Result,
+    > {
         let thread_id = std::thread::current().id();
         Ok(match self.secondary_buffers.entry(thread_id) {
             Entry::Occupied(mut entry) => {
@@ -89,29 +97,26 @@ impl ThreadLocalSecondaryBufferMap {
         self: &Arc<Self>,
         buffers: &mut Vec<CommandBuffer<{ SECONDARY }, { INVALID }, { OUTSIDE }, true>>,
     ) {
-
-        while let Some(command_buffer) = buffers.pop() {
+        buffers.par_drain(..).for_each(|command_buffer| {
             let command_buffer_inheritance_info = self.command_buffer_inheritance_info.clone();
             let this = self.clone();
-            rayon::spawn(move || {
-                let command_buffer = command_buffer
-                    .reset()
-                    .unwrap()
-                    .begin(command_buffer_inheritance_info)
-                    .unwrap();
-                let thread_id = this
-                    .secondary_buffer_handles
-                    .get(&command_buffer.handle())
-                    .expect("inner error: command handle not exists any more");
-                this.secondary_buffers.insert(
-                    *thread_id,
-                    ThreadLocalSecondaryBuffer {
-                        dirty: false,
-                        buffer: command_buffer,
-                    },
-                );
-            })
-        }
+            let command_buffer = command_buffer
+                .reset()
+                .unwrap()
+                .begin(command_buffer_inheritance_info)
+                .unwrap();
+            let thread_id = this
+                .secondary_buffer_handles
+                .get(&command_buffer.handle())
+                .expect("inner error: command handle not exists any more");
+            this.secondary_buffers.insert(
+                *thread_id,
+                ThreadLocalSecondaryBuffer {
+                    dirty: false,
+                    buffer: command_buffer,
+                },
+            );
+        });
     }
 }
 
@@ -143,6 +148,15 @@ impl RecordableQueue {
             fence: Some(fence),
         })
     }
+    pub fn get_thread_local_secondary_buffer(
+        &self,
+    ) -> Result<
+        RefMut<ThreadId, ThreadLocalSecondaryBuffer, BuildHasherDefault<FxHasher>>,
+        yarvk::Result,
+    > {
+        self.thread_local_secondary_buffer_map
+            .get_thread_local_secondary_buffer()
+    }
     // Used command buffer to some simple recording job, wait until job finished executing.
     pub fn simple_record(
         &mut self,
@@ -170,16 +184,15 @@ impl RecordableQueue {
         self.fence = Some(fence);
         Ok(())
     }
+
     pub fn simple_secondary_record(
         &mut self,
-        f: impl FnOnce(&ThreadLocalSecondaryBufferMap) -> Result<(), yarvk::Result>,
     ) -> Result<(), yarvk::Result> {
         let command_buffer = self.command_buffer.take().unwrap();
         let command_handle = command_buffer.handle();
         let fence = self.fence.take().unwrap();
         let command_buffer = command_buffer
             .record(|primary_command_buffer| {
-                f(&self.thread_local_secondary_buffer_map)?;
                 primary_command_buffer.cmd_execute_commands(
                     &mut self.thread_local_secondary_buffer_map.collect_dirty(),
                 );
@@ -198,8 +211,7 @@ impl RecordableQueue {
             .take_invalid_primary_buffer(&command_handle)
             .unwrap();
         let secondary_buffers = primary_command_buffer.secondary_buffers();
-        self.thread_local_secondary_buffer_map
-            .return_buffers(secondary_buffers);
+        self.thread_local_secondary_buffer_map.return_buffers(secondary_buffers);
         let primary_command_buffer = primary_command_buffer.reset()?;
         self.command_buffer = Some(primary_command_buffer);
         self.fence = Some(fence);
