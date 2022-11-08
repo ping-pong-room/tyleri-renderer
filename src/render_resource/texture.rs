@@ -187,31 +187,35 @@ impl TextureAllocator {
                 )
                 .build()
         });
-        self.descriptor_pool.allocate(
-            updates
-                .iter()
-                .map(|(index, view)| (*index, TextureSamplerUpdateInfo::new(view.clone()))),
-        );
-        // Copy images
-        transfer_queue
-            .unwrap_or(present_queue)
-            .simple_secondary_record()
-            .unwrap();
-        // TODO submit together
-        // set image layout
-        present_queue
-            .simple_record(|command_buffer| {
-                command_buffer.cmd_pipeline_barrier(
-                    [PipelineStageFlags::Transfer],
-                    [PipelineStageFlags::FragmentShader],
-                    DependencyFlags::empty(),
-                    [],
-                    [],
-                    copy_end_barriers,
-                );
-                Ok(())
-            })
-            .unwrap();
+        // update descriptor and submit commands in parallel
+        rayon::join(|| {
+            self.descriptor_pool.allocate(
+                updates
+                    .iter()
+                    .map(|(index, view)| (*index, TextureSamplerUpdateInfo::new(view.clone()))),
+            );
+        }, || {
+            // Copy images
+            transfer_queue
+                .unwrap_or(present_queue)
+                .simple_secondary_record()
+                .unwrap();
+            // TODO submit together
+            // set image layout
+            present_queue
+                .simple_record(|command_buffer| {
+                    command_buffer.cmd_pipeline_barrier(
+                        [PipelineStageFlags::Transfer],
+                        [PipelineStageFlags::FragmentShader],
+                        DependencyFlags::empty(),
+                        [],
+                        [],
+                        copy_end_barriers,
+                    );
+                    Ok(())
+                })
+                .unwrap();
+        });
     }
     pub fn get_descriptor_set(&self, index: &usize) -> Option<&DescriptorSet> {
         self.descriptor_pool.get_descriptor_set(index)
