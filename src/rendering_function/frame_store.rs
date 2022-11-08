@@ -1,4 +1,4 @@
-use crate::render_resource::texture::TextureSamplerUpdateInfo;
+use crate::render_resource::texture::{TextureAllocator, TextureSamplerUpdateInfo};
 use crate::unlimited_descriptor_pool::UnlimitedDescriptorPool;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -29,7 +29,7 @@ pub(crate) struct FrameStore {
 impl FrameStore {
     pub fn record<
         F: FnOnce(
-            &UnlimitedDescriptorPool<TextureSamplerUpdateInfo>,
+            &TextureAllocator,
             &mut [CommandBuffer<{ SECONDARY }, { RECORDING }, { INSIDE }, true>],
         ) -> Result<(), yarvk::Result>,
     >(
@@ -37,7 +37,7 @@ impl FrameStore {
         swapchain: &mut Swapchain,
         present_queue: &mut Queue,
         image: &ContinuousImage,
-        texture_sampler_descriptor_pool: &UnlimitedDescriptorPool<TextureSamplerUpdateInfo>,
+        texture_allocator: &TextureAllocator,
         f: F,
     ) -> Result<(), yarvk::Result> {
         let (signaled_fence, mut submit_result) = self.fence.take().unwrap().wait()?;
@@ -84,7 +84,7 @@ impl FrameStore {
                                         ..Default::default()
                                     });
                                 });
-                                f(texture_sampler_descriptor_pool, secondary_buffers)
+                                f(texture_allocator, secondary_buffers)
                             },
                         )?;
                         primary_command_buffer.cmd_execute_commands(&mut secondary_buffers);

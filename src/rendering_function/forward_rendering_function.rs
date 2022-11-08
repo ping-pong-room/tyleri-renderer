@@ -1,5 +1,5 @@
 use crate::memory_allocator::MemoryBindingBuilder;
-use crate::render_resource::texture::TextureSamplerUpdateInfo;
+use crate::render_resource::texture::{TextureAllocator, TextureSamplerUpdateInfo};
 use crate::rendering_function::frame_store::FrameStore;
 use crate::rendering_function::RenderingFunction;
 use crate::unlimited_descriptor_pool::UnlimitedDescriptorPool;
@@ -231,14 +231,14 @@ impl ForwardRenderingFunction {
 impl RenderingFunction for ForwardRenderingFunction {
     fn record_next_frame<
         F: FnOnce(
-            &UnlimitedDescriptorPool<TextureSamplerUpdateInfo>,
+            &TextureAllocator,
             &mut [CommandBuffer<{ SECONDARY }, { RECORDING }, { INSIDE }, true>],
         ) -> Result<(), yarvk::Result>,
     >(
         &mut self,
         swapchain: &mut Swapchain,
         present_queue: &mut Queue,
-        texture_sampler_descriptor_pool: &UnlimitedDescriptorPool<TextureSamplerUpdateInfo>,
+        texture_allocator: &TextureAllocator,
         f: F,
     ) -> Result<(), yarvk::Result> {
         let (frame_store, image) = self.acquire_next_image(swapchain)?;
@@ -246,7 +246,7 @@ impl RenderingFunction for ForwardRenderingFunction {
             swapchain,
             present_queue,
             &image,
-            texture_sampler_descriptor_pool,
+            texture_allocator,
             f,
         )?;
         Ok(())

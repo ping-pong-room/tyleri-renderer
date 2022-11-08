@@ -1,4 +1,4 @@
-use crate::render_resource::texture::TextureSamplerUpdateInfo;
+use crate::render_resource::texture::{TextureAllocator, TextureSamplerUpdateInfo};
 use crate::unlimited_descriptor_pool::UnlimitedDescriptorPool;
 use std::sync::Arc;
 use yarvk::command::command_buffer::CommandBuffer;
@@ -15,14 +15,14 @@ pub mod frame_store;
 pub(crate) trait RenderingFunction {
     fn record_next_frame<
         F: FnOnce(
-            &UnlimitedDescriptorPool<TextureSamplerUpdateInfo>,
+            &TextureAllocator,
             &mut [CommandBuffer<{ SECONDARY }, { RECORDING }, { INSIDE }, true>],
         ) -> Result<(), yarvk::Result>,
     >(
         &mut self,
         swapchain: &mut Swapchain,
         present_queue: &mut Queue,
-        texture_sampler_descriptor_pool: &UnlimitedDescriptorPool<TextureSamplerUpdateInfo>,
+        texture_allocator: &TextureAllocator,
         f: F,
     ) -> Result<(), yarvk::Result>;
 

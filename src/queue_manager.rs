@@ -65,6 +65,7 @@ impl QueueManager {
                     .build();
             device_builder = device_builder.add_queue_info(transfer_queue_create_info);
         } else {
+            // TODO check other queue family for a transfer queue
             if present_queue_family.queue_count > 1 {
                 present_queue_create_info_builder =
                     present_queue_create_info_builder.add_priority(TRANSFER_QUEUE_PRIORITY);

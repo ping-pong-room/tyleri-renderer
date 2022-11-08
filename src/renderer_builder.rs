@@ -212,7 +212,6 @@ impl RendererBuilder {
         let default_sampler = sampler_builder.build()?;
         let texture_allocator = TextureAllocator::new(
             default_sampler.clone(),
-            msaa_sample_counts,
             &memory_allocator,
         )?;
         Ok(Renderer {

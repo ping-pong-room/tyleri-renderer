@@ -8,6 +8,7 @@ use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
 use std::sync::Arc;
 use yarvk::barrier::ImageMemoryBarrier;
+use yarvk::descriptor::descriptor_set::DescriptorSet;
 use yarvk::descriptor::descriptor_set_layout::{DescriptorSetLayout, DescriptorSetLayoutBinding};
 use yarvk::descriptor::write_descriptor_sets::{DescriptorImageInfo, WriteDescriptorSets};
 use yarvk::descriptor::DescriptorType;
@@ -20,31 +21,24 @@ use yarvk::pipeline::pipeline_stage_flags::PipelineStageFlags;
 use yarvk::pipeline::shader_stage::ShaderStage;
 use yarvk::queue::Queue;
 use yarvk::sampler::Sampler;
-use yarvk::{
-    AccessFlags, BorderColor, BufferImageCopy, BufferUsageFlags, CompareOp, ComponentMapping,
-    ComponentSwizzle, ContinuousBuffer, ContinuousImage, DependencyFlags, Extent2D, Extent3D,
-    Filter, Format, ImageAspectFlags, ImageLayout, ImageSubresourceLayers, ImageTiling, ImageType,
-    ImageUsageFlags, MemoryPropertyFlags, SampleCountFlags, SamplerAddressMode, SamplerMipmapMode,
-};
+use yarvk::{AccessFlags, BorderColor, BufferImageCopy, BufferUsageFlags, CompareOp, ComponentMapping, ComponentSwizzle, ContinuousBuffer, ContinuousImage, DependencyFlags, Extent2D, Extent3D, Filter, Format, Handle, ImageAspectFlags, ImageLayout, ImageSubresourceLayers, ImageTiling, ImageType, ImageUsageFlags, MemoryPropertyFlags, SampleCountFlags, SamplerAddressMode, SamplerMipmapMode};
 
 pub struct TextureImageInfo {
-    data: Vec<u8>,
-    format: Format,
-    extent: Extent2D,
-    index: usize,
+    pub data: Vec<u8>,
+    pub format: Format,
+    pub extent: Extent2D,
+    pub index: usize,
 }
 
 pub struct TextureAllocator {
     descriptor_set_layout: Arc<DescriptorSetLayout>,
-    pub descriptor_pool: UnlimitedDescriptorPool<TextureSamplerUpdateInfo>,
-    msaa_sample_counts: SampleCountFlags,
+    descriptor_pool: UnlimitedDescriptorPool<TextureSamplerUpdateInfo>,
     memory_allocator: Arc<MemoryAllocator>,
 }
 
 impl TextureAllocator {
     pub fn new(
         default_sampler: Arc<Sampler>,
-        msaa_sample_counts: SampleCountFlags,
         memory_allocator: &Arc<MemoryAllocator>,
     ) -> Result<Self, yarvk::Result> {
         let device = default_sampler.device.clone();
@@ -65,14 +59,17 @@ impl TextureAllocator {
         Ok(Self {
             descriptor_set_layout,
             descriptor_pool,
-            msaa_sample_counts,
             memory_allocator: memory_allocator.clone(),
         })
+    }
+    pub fn descriptor_set_layout(&self) -> Arc<DescriptorSetLayout> {
+        self.descriptor_set_layout.clone()
     }
     pub fn allocate_textures<It: IntoParallelIterator<Item = TextureImageInfo>>(
         &mut self,
         it: It,
-        queue: &mut RecordableQueue,
+        transfer_queue: Option<&mut RecordableQueue>,
+        present_queue: &mut RecordableQueue,
     ) {
         let updates = it
             .into_par_iter()
@@ -103,7 +100,7 @@ impl TextureAllocator {
                     .extent(image_info.extent.into())
                     .mip_levels(1)
                     .array_layers(1)
-                    .samples(self.msaa_sample_counts)
+                    .samples(SampleCountFlags::TYPE_1)
                     .tiling(ImageTiling::OPTIMAL)
                     .usage(ImageUsageFlags::TRANSFER_DST | ImageUsageFlags::SAMPLED)
                     .sharing_mode(SharingMode::EXCLUSIVE)
@@ -142,17 +139,17 @@ impl TextureAllocator {
                             .build(),
                     )
                     .build();
-                let mut image_barriers = Vec::with_capacity(1);
-                image_barriers.push(texture_barrier);
-                let mut command_buffer = queue.get_thread_local_secondary_buffer().unwrap();
+                let mut command_buffer = (transfer_queue.as_ref().unwrap_or(&present_queue))
+                    .get_thread_local_secondary_buffer()
+                    .unwrap();
                 let command_buffer = command_buffer.value_mut();
                 command_buffer.cmd_pipeline_barrier(
-                    &[PipelineStageFlags::BottomOfPipe],
-                    &[PipelineStageFlags::Transfer],
+                    [PipelineStageFlags::BottomOfPipe],
+                    [PipelineStageFlags::Transfer],
                     DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &image_barriers,
+                    [],
+                    [],
+                    [texture_barrier],
                 );
                 let buffer_copy_regions = BufferImageCopy::builder()
                     .image_subresource(
@@ -172,29 +169,67 @@ impl TextureAllocator {
                     ImageLayout::TRANSFER_DST_OPTIMAL,
                     &[buffer_copy_regions.build()],
                 );
-                (image_info.index, TextureSamplerUpdateInfo::new(tex_image_view))
+                (image_info.index, tex_image_view)
             })
             .collect::<Vec<_>>();
-        rayon::join(
-            || {
-                self.descriptor_pool.allocate(updates);
-            },
-            || {
-                queue.simple_secondary_record().unwrap();
-            },
+        let copy_end_barriers = updates.iter().map(|(_, view)| {
+            ImageMemoryBarrier::builder(view.image.clone())
+                .src_access_mask(AccessFlags::TRANSFER_WRITE)
+                .dst_access_mask(AccessFlags::SHADER_READ)
+                .old_layout(ImageLayout::TRANSFER_DST_OPTIMAL)
+                .new_layout(ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .subresource_range(
+                    ImageSubresourceRange::builder()
+                        .aspect_mask(ImageAspectFlags::COLOR)
+                        .level_count(1)
+                        .layer_count(1)
+                        .build(),
+                )
+                .build()
+        });
+        self.descriptor_pool.allocate(
+            updates
+                .iter()
+                .map(|(index, view)| (*index, TextureSamplerUpdateInfo::new(view.clone()))),
         );
+        // Copy images
+        transfer_queue
+            .unwrap_or(present_queue)
+            .simple_secondary_record()
+            .unwrap();
+        // TODO submit together
+        // set image layout
+        present_queue
+            .simple_record(|command_buffer| {
+                command_buffer.cmd_pipeline_barrier(
+                    [PipelineStageFlags::Transfer],
+                    [PipelineStageFlags::FragmentShader],
+                    DependencyFlags::empty(),
+                    [],
+                    [],
+                    copy_end_barriers,
+                );
+                Ok(())
+            })
+            .unwrap();
+    }
+    pub fn get_descriptor_set(&self, index: &usize) -> Option<&DescriptorSet> {
+        self.descriptor_pool.get_descriptor_set(index)
     }
 }
 
 #[derive(Clone)]
 pub struct TextureSamplerUpdateInfo {
-    pub update_infos: [DescriptorImageInfo; 1],
+    update_infos: [DescriptorImageInfo; 1],
 }
 
 impl TextureSamplerUpdateInfo {
     pub fn new(image_view: Arc<ImageView>) -> Self {
         Self {
-            update_infos: [DescriptorImageInfo::builder().image_view(image_view).build()]
+            update_infos: [DescriptorImageInfo::builder()
+                .image_view(image_view)
+                .image_layout(ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .build()],
         }
     }
 }

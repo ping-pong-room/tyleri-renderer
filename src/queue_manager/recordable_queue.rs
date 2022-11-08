@@ -87,10 +87,13 @@ impl ThreadLocalSecondaryBufferMap {
         self.secondary_buffers
             .iter()
             .filter(|cb| cb.dirty)
-            .map(|cb| (self.secondary_buffers.remove(cb.key()).unwrap()))
+            .map(|cb| *cb.key())
             .collect::<Vec<_>>()
             .into_par_iter()
-            .map(|(thread_id, cb)| cb.buffer.end().unwrap())
+            .map(|(thread_id)| {
+                let (_, cb) = self.secondary_buffers.remove(&thread_id).unwrap();
+                cb.buffer.end().unwrap()
+            })
             .collect()
     }
     fn return_buffers(
@@ -185,9 +188,7 @@ impl RecordableQueue {
         Ok(())
     }
 
-    pub fn simple_secondary_record(
-        &mut self,
-    ) -> Result<(), yarvk::Result> {
+    pub fn simple_secondary_record(&mut self) -> Result<(), yarvk::Result> {
         let command_buffer = self.command_buffer.take().unwrap();
         let command_handle = command_buffer.handle();
         let fence = self.fence.take().unwrap();
@@ -211,7 +212,8 @@ impl RecordableQueue {
             .take_invalid_primary_buffer(&command_handle)
             .unwrap();
         let secondary_buffers = primary_command_buffer.secondary_buffers();
-        self.thread_local_secondary_buffer_map.return_buffers(secondary_buffers);
+        self.thread_local_secondary_buffer_map
+            .return_buffers(secondary_buffers);
         let primary_command_buffer = primary_command_buffer.reset()?;
         self.command_buffer = Some(primary_command_buffer);
         self.fence = Some(fence);
