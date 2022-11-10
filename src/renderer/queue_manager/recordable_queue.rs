@@ -1,4 +1,9 @@
-use crate::unlimited_descriptor_pool::UnlimitedDescriptorPool;
+use std::collections::HashMap;
+use std::hash::BuildHasherDefault;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::thread::ThreadId;
+
 use dashmap::mapref::entry::Entry;
 use dashmap::mapref::one::{Ref, RefMut};
 use dashmap::{DashMap, DashSet};
@@ -7,16 +12,12 @@ use parking_lot::{Condvar, Mutex};
 use rayon::iter::ParallelIterator;
 use rayon::iter::{IntoParallelIterator, ParallelDrainRange};
 use rustc_hash::{FxHashMap, FxHasher};
-use std::collections::HashMap;
-use std::hash::BuildHasherDefault;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::thread::ThreadId;
 use yarvk::command::command_buffer::Level::{PRIMARY, SECONDARY};
 use yarvk::command::command_buffer::RenderPassScope::{INSIDE, OUTSIDE};
 use yarvk::command::command_buffer::State::{EXECUTABLE, INITIAL, INVALID, RECORDING};
-use yarvk::command::command_buffer::{CommandBuffer, CommandBufferInheritanceInfo};
-use yarvk::command::command_pool::CommandPool;
+use yarvk::command::command_buffer::{
+    CommandBuffer, CommandBufferInheritanceInfo, TransientCommandBuffer,
+};
 use yarvk::device::Device;
 use yarvk::fence::{Fence, UnsignaledFence};
 use yarvk::physical_device::queue_family_properties::QueueFamilyProperties;
@@ -29,13 +30,13 @@ pub struct ThreadLocalSecondaryBuffer {
     dirty: bool,
     #[deref]
     #[deref_mut]
-    buffer: CommandBuffer<{ SECONDARY }, { RECORDING }, { OUTSIDE }, true>,
+    buffer: CommandBuffer<{ SECONDARY }, { RECORDING }, { OUTSIDE }>,
 }
 
 pub struct ThreadLocalSecondaryBufferMap {
     queue_family: QueueFamilyProperties,
     device: Arc<Device>,
-    command_buffer_inheritance_info: Pin<Arc<CommandBufferInheritanceInfo>>,
+    command_buffer_inheritance_info: Arc<CommandBufferInheritanceInfo>,
     secondary_buffers: DashMap<ThreadId, ThreadLocalSecondaryBuffer, BuildHasherDefault<FxHasher>>,
     secondary_buffer_handles: DashMap<u64, ThreadId, BuildHasherDefault<FxHasher>>,
 }
@@ -64,10 +65,10 @@ impl ThreadLocalSecondaryBufferMap {
                 ref_mut
             }
             Entry::Vacant(entry) => {
-                let secondary_buffer =
-                    CommandPool::builder(self.queue_family.clone(), self.device.clone())
-                        .build()?
-                        .allocate_command_buffer::<{ SECONDARY }>()?;
+                let secondary_buffer = TransientCommandBuffer::<{ SECONDARY }>::new(
+                    &self.device,
+                    self.queue_family.clone(),
+                )?;
                 let secondary_buffer =
                     secondary_buffer.begin(self.command_buffer_inheritance_info.clone())?;
                 let secondary_buffer = ThreadLocalSecondaryBuffer {
@@ -81,16 +82,14 @@ impl ThreadLocalSecondaryBufferMap {
             }
         })
     }
-    fn collect_dirty(
-        &self,
-    ) -> Vec<CommandBuffer<{ SECONDARY }, { EXECUTABLE }, { OUTSIDE }, true>> {
+    fn collect_dirty(&self) -> Vec<CommandBuffer<{ SECONDARY }, { EXECUTABLE }, { OUTSIDE }>> {
         self.secondary_buffers
             .iter()
             .filter(|cb| cb.dirty)
             .map(|cb| *cb.key())
             .collect::<Vec<_>>()
             .into_par_iter()
-            .map(|(thread_id)| {
+            .map(|thread_id| {
                 let (_, cb) = self.secondary_buffers.remove(&thread_id).unwrap();
                 cb.buffer.end().unwrap()
             })
@@ -98,7 +97,7 @@ impl ThreadLocalSecondaryBufferMap {
     }
     fn return_buffers(
         self: &Arc<Self>,
-        buffers: &mut Vec<CommandBuffer<{ SECONDARY }, { INVALID }, { OUTSIDE }, true>>,
+        buffers: &mut Vec<CommandBuffer<{ SECONDARY }, { INVALID }, { OUTSIDE }>>,
     ) {
         buffers.par_drain(..).for_each(|command_buffer| {
             let command_buffer_inheritance_info = self.command_buffer_inheritance_info.clone();
@@ -128,7 +127,7 @@ pub struct RecordableQueue {
     #[deref]
     #[deref_mut]
     queue: Queue,
-    command_buffer: Option<CommandBuffer<{ PRIMARY }, { INITIAL }, { OUTSIDE }, true>>,
+    command_buffer: Option<CommandBuffer<{ PRIMARY }, { INITIAL }, { OUTSIDE }>>,
     thread_local_secondary_buffer_map: Arc<ThreadLocalSecondaryBufferMap>,
     fence: Option<UnsignaledFence>,
 }
@@ -136,11 +135,10 @@ pub struct RecordableQueue {
 impl RecordableQueue {
     pub fn new(queue: Queue) -> Result<Self, yarvk::Result> {
         let device = queue.device.clone();
-        let command_buffer =
-            CommandPool::builder(queue.queue_family_property.clone(), device.clone())
-                .build()
-                .unwrap()
-                .allocate_command_buffer::<{ PRIMARY }>()?;
+        let command_buffer = TransientCommandBuffer::<{ PRIMARY }>::new(
+            &device,
+            queue.queue_family_property.clone(),
+        )?;
         let fence = Fence::new(device.clone())?;
         let thread_local_secondary_buffer_map =
             Arc::new(ThreadLocalSecondaryBufferMap::new(&queue));
@@ -164,7 +162,7 @@ impl RecordableQueue {
     pub fn simple_record(
         &mut self,
         f: impl FnOnce(
-            &mut CommandBuffer<{ PRIMARY }, { RECORDING }, { OUTSIDE }, true>,
+            &mut CommandBuffer<{ PRIMARY }, { RECORDING }, { OUTSIDE }>,
         ) -> Result<(), yarvk::Result>,
     ) -> Result<(), yarvk::Result> {
         let command_buffer = self.command_buffer.take().unwrap();

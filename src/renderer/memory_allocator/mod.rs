@@ -1,5 +1,5 @@
-use crate::memory_allocator::block_allocator::BlockBasedAllocator;
-use crate::memory_allocator::dedicated_resource::{DedicatedBuffer, DedicatedImage};
+use crate::renderer::memory_allocator::block_allocator::BlockBasedAllocator;
+use crate::renderer::memory_allocator::dedicated_resource::{DedicatedBuffer, DedicatedImage};
 
 use rustc_hash::{FxHashMap, FxHasher};
 use std::hash::BuildHasherDefault;
@@ -10,61 +10,38 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 use yarvk::device::Device;
-use yarvk::device_memory::MemoryRequirement;
+use yarvk::device_memory::{BindMemory, DeviceMemory, MemoryRequirement};
 
-use yarvk::physical_device::memory_properties::MemoryType;
+use yarvk::physical_device::memory_properties::{MemoryType, PhysicalDeviceMemoryProperties};
 
 use yarvk::physical_device::PhysicalDevice;
 
 use crate::{FxDashMap, FxRef, FxRefMut};
+use yarvk::device_memory::State::{Bound, Unbound};
 use yarvk::{
-    ContinuousBufferBuilder, ContinuousImageBuilder, Handle, MemoryPropertyFlags,
-    MemoryRequirements,
+    Buffer, ContinuousBuffer, ContinuousBufferBuilder, ContinuousImage, ContinuousImageBuilder,
+    DeviceSize, ExtendsMemoryRequirements2, Extent3D, Handle, Image, MemoryDedicatedRequirements,
+    MemoryPropertyFlags, MemoryRequirements,
 };
 
 pub mod block_allocator;
 pub mod dedicated_resource;
+pub mod staging_vector;
 
-pub trait Image: yarvk::Image {
-    fn size(&self) -> u64 {
-        self.raw().get_memory_requirements().size
-    }
-    fn map_host_local_memory(&mut self, f: &dyn Fn(&mut [u8])) -> Result<(), yarvk::Result>;
-}
-
-impl Deref for dyn Image {
-    type Target = dyn yarvk::Image;
-
-    fn deref(&self) -> &Self::Target {
-        self.raw()
-    }
-}
-
-impl DerefMut for dyn Image {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.raw_mut()
-    }
-}
-
-pub trait Buffer: yarvk::Buffer {
-    fn size(&self) -> u64 {
-        self.raw().get_memory_requirements().size
-    }
-    fn map_host_local_memory(&mut self, f: &dyn Fn(&mut [u8])) -> Result<(), yarvk::Result>;
-}
-
-impl Deref for dyn Buffer {
-    type Target = dyn yarvk::Buffer;
-
-    fn deref(&self) -> &Self::Target {
-        self.raw()
-    }
-}
-
-impl DerefMut for dyn Buffer {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.raw_mut()
-    }
+fn find_memory_type_index(
+    memory_req: &MemoryRequirements,
+    memory_prop: &PhysicalDeviceMemoryProperties,
+    flags: MemoryPropertyFlags,
+) -> Option<MemoryType> {
+    memory_prop
+        .memory_types
+        .iter()
+        .enumerate()
+        .find(|(index, memory_type)| {
+            (1 << index) & memory_req.memory_type_bits != 0
+                && memory_type.property_flags & flags == flags
+        })
+        .map(|(_index, memory_type)| memory_type.clone())
 }
 
 pub trait MemoryBindingBuilder {
@@ -91,7 +68,12 @@ impl MemoryBindingBuilder for ContinuousBufferBuilder {
             .get_memory_type(&buffer, property_flags)
             .unwrap()
             .clone();
-        if dedicated {
+        let dedicated_requirements =
+            buffer.get_memory_requirements2::<MemoryDedicatedRequirements>();
+        if dedicated
+            || dedicated_requirements.prefers_dedicated_allocation != 0
+            || dedicated_requirements.requires_dedicated_allocation != 0
+        {
             Ok(Arc::new(DedicatedBuffer::new(buffer, &memory_type)?))
         } else {
             Ok(Arc::new(
@@ -118,7 +100,12 @@ impl MemoryBindingBuilder for ContinuousImageBuilder {
             .get_memory_type(&image, property_flags)
             .unwrap()
             .clone();
-        if dedicated {
+        let dedicated_requirements =
+            image.get_memory_requirements2::<MemoryDedicatedRequirements>();
+        if dedicated
+            || dedicated_requirements.prefers_dedicated_allocation != 0
+            || dedicated_requirements.requires_dedicated_allocation != 0
+        {
             Ok(Arc::new(DedicatedImage::new(image, &memory_type)?))
         } else {
             Ok(Arc::new(
@@ -162,7 +149,6 @@ impl MemoryAllocator {
             )));
         allocator.clone()
     }
-
     fn get_memory_type<T: MemoryRequirement>(
         &self,
         t: &T,

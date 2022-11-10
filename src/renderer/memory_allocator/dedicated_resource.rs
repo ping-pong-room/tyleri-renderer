@@ -1,4 +1,4 @@
-use crate::memory_allocator::{Buffer, Image};
+use crate::renderer::memory_allocator::{Buffer, Image};
 use derive_more::{Deref, DerefMut};
 use yarvk::device_memory::dedicated_memory::{DedicatedResource, MemoryDedicatedAllocateInfo};
 use yarvk::device_memory::State::Unbound;
@@ -15,14 +15,6 @@ pub struct DedicatedBuffer {
 }
 
 impl Buffer for DedicatedBuffer {
-    fn map_host_local_memory(&mut self, f: &dyn Fn(&mut [u8])) -> Result<(), yarvk::Result> {
-        self.device_memory
-            .map_memory(0, self.device_memory.size, f)?;
-        Ok(())
-    }
-}
-
-impl yarvk::Buffer for DedicatedBuffer {
     fn raw(&self) -> &RawBuffer {
         self.yarvk_buffer.raw()
     }
@@ -61,14 +53,6 @@ pub struct DedicatedImage {
 }
 
 impl Image for DedicatedImage {
-    fn map_host_local_memory(&mut self, f: &dyn Fn(&mut [u8])) -> Result<(), yarvk::Result> {
-        self.device_memory
-            .map_memory(0, self.device_memory.size, f)?;
-        Ok(())
-    }
-}
-
-impl yarvk::Image for DedicatedImage {
     fn raw(&self) -> &RawImage {
         self.yarvk_image.raw()
     }

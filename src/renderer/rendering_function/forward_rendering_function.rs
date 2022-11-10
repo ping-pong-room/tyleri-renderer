@@ -1,19 +1,18 @@
-use crate::memory_allocator::MemoryBindingBuilder;
-use crate::render_resource::texture::{TextureAllocator, TextureSamplerUpdateInfo};
-use crate::rendering_function::frame_store::FrameStore;
-use crate::rendering_function::RenderingFunction;
-use crate::unlimited_descriptor_pool::UnlimitedDescriptorPool;
-use crate::{MemoryAllocator, QueueManager};
+use crate::renderer::memory_allocator::MemoryBindingBuilder;
+use crate::renderer::rendering_function::frame_store::FrameStore;
+use crate::renderer::rendering_function::RenderingFunction;
+use crate::renderer::{MemoryAllocator, QueueManager};
+use rayon::current_num_threads;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
-use rayon::current_num_threads;
 use yarvk::command::command_buffer::Level::{PRIMARY, SECONDARY};
 use yarvk::command::command_buffer::RenderPassScope::INSIDE;
 use yarvk::command::command_buffer::State::RECORDING;
-use yarvk::command::command_buffer::{CommandBuffer, CommandBufferInheritanceInfo};
-use yarvk::command::command_pool::CommandPool;
+use yarvk::command::command_buffer::{
+    CommandBuffer, CommandBufferInheritanceInfo, TransientCommandBuffer,
+};
 use yarvk::fence::Fence;
 use yarvk::frame_buffer::Framebuffer;
 use yarvk::image_subresource_range::ImageSubresourceRange;
@@ -157,25 +156,25 @@ impl ForwardRenderingFunction {
                     .build(device.clone())?;
                 let mut submit_result = SubmitResult::default();
                 let present_queue_family = queue_manager.get_present_queue_family();
-                let primary_command_buffer =
-                    CommandPool::builder(present_queue_family.clone(), device.clone())
-                        .build()
-                        .unwrap()
-                        .allocate_command_buffer::<{ PRIMARY }>()?;
+                let primary_command_buffer = TransientCommandBuffer::<{ PRIMARY }>::new(
+                    &device,
+                    present_queue_family.clone().clone(),
+                )
+                .unwrap();
                 let primary_command_buffer_handle = primary_command_buffer.handle();
                 let secondary_command_buffers = [0..current_num_threads()]
                     .par_iter()
                     .map(|_| {
-                        CommandPool::builder(present_queue_family.clone(), device.clone())
-                            .build()
-                            .unwrap()
-                            .allocate_command_buffer::<{ SECONDARY }>()
-                            .unwrap()
+                        TransientCommandBuffer::<{ SECONDARY }>::new(
+                            &device,
+                            present_queue_family.clone().clone(),
+                        )
+                        .unwrap()
                     })
                     .collect();
                 submit_result.add_primary_buffer(primary_command_buffer);
                 let fence = Fence::new_signaling(device.clone(), submit_result)?;
-                let renderpass_begin_info =
+                let renderpass_begin_info = Arc::new(
                     RenderPassBeginInfo::builder(renderpass.clone(), framebuffer.clone())
                         .render_area(surface_resolution.into())
                         .add_clear_value(ClearValue {
@@ -189,7 +188,8 @@ impl ForwardRenderingFunction {
                                 stencil: 0,
                             },
                         })
-                        .build();
+                        .build(),
+                );
                 let inheritance_info = CommandBufferInheritanceInfo::builder()
                     .render_pass(renderpass.clone())
                     .subpass(0)
@@ -231,24 +231,16 @@ impl ForwardRenderingFunction {
 impl RenderingFunction for ForwardRenderingFunction {
     fn record_next_frame<
         F: FnOnce(
-            &TextureAllocator,
-            &mut [CommandBuffer<{ SECONDARY }, { RECORDING }, { INSIDE }, true>],
+            &mut [CommandBuffer<{ SECONDARY }, { RECORDING }, { INSIDE }>],
         ) -> Result<(), yarvk::Result>,
     >(
         &mut self,
         swapchain: &mut Swapchain,
         present_queue: &mut Queue,
-        texture_allocator: &TextureAllocator,
         f: F,
     ) -> Result<(), yarvk::Result> {
         let (frame_store, image) = self.acquire_next_image(swapchain)?;
-        frame_store.record(
-            swapchain,
-            present_queue,
-            &image,
-            texture_allocator,
-            f,
-        )?;
+        frame_store.record(swapchain, present_queue, &image, f)?;
         Ok(())
     }
 

@@ -1,10 +1,12 @@
-use crate::memory_allocator::MemoryAllocator;
-use crate::queue_manager::QueueManager;
+use crate::renderer::memory_allocator::MemoryAllocator;
+use crate::renderer::queue_manager::QueueManager;
 
-use crate::Renderer;
+use crate::renderer::Renderer;
 
+use dashmap::DashMap;
 use float_ord::FloatOrd;
 use raw_window_handle::HasRawWindowHandle;
+use rustc_hash::FxHasher;
 use std::collections::BTreeMap;
 use std::ffi::CStr;
 use std::sync::Arc;
@@ -19,13 +21,9 @@ use yarvk::extensions::{PhysicalDeviceExtensionType, PhysicalInstanceExtensionTy
 use yarvk::instance::{ApplicationInfo, Instance};
 use yarvk::physical_device::{PhysicalDevice, SharingMode};
 
-use crate::rendering_function::forward_rendering_function::ForwardRenderingFunction;
+use crate::renderer::rendering_function::forward_rendering_function::ForwardRenderingFunction;
 
 use yarvk::device::Device;
-
-use crate::render_resource::texture::TextureAllocator;
-use crate::unlimited_descriptor_pool::UnlimitedDescriptorPool;
-
 use yarvk::sampler::Sampler;
 use yarvk::surface::Surface;
 use yarvk::swapchain::Swapchain;
@@ -210,18 +208,14 @@ impl RendererBuilder {
         };
 
         let default_sampler = sampler_builder.build()?;
-        let texture_allocator = TextureAllocator::new(
-            default_sampler.clone(),
-            &memory_allocator,
-        )?;
         Ok(Renderer {
             queue_manager,
             swapchain,
             memory_allocator,
             forward_rendering_function,
             default_sampler,
-            texture_allocator,
             msaa_sample_counts,
+            meshes: DashMap::default(),
         })
     }
 }

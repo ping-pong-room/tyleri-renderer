@@ -13,5 +13,6 @@ raw-window-handle = "0.4.3"
 glam = "0.21.3"
 rayon = "1.5.3"
 dashmap = "5.4.0"
+crossbeam-queue = "0.3.6"
 
 [dev-dependencies]

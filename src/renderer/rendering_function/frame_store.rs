@@ -1,6 +1,3 @@
-use crate::render_resource::texture::{TextureAllocator, TextureSamplerUpdateInfo};
-use crate::unlimited_descriptor_pool::UnlimitedDescriptorPool;
-use std::pin::Pin;
 use std::sync::Arc;
 use yarvk::command::command_buffer::Level::SECONDARY;
 use yarvk::command::command_buffer::RenderPassScope::{INSIDE, OUTSIDE};
@@ -16,28 +13,26 @@ use yarvk::swapchain::{PresentInfo, Swapchain};
 use yarvk::{ContinuousImage, Rect2D, SubpassContents, Viewport};
 
 pub(crate) struct FrameStore {
-    pub(crate) renderpass_begin_info: RenderPassBeginInfo,
-    pub(crate) inheritance_info: Pin<Arc<CommandBufferInheritanceInfo>>,
+    pub(crate) renderpass_begin_info: Arc<RenderPassBeginInfo>,
+    pub(crate) inheritance_info: Arc<CommandBufferInheritanceInfo>,
     pub(crate) present_complete_semaphore: Semaphore,
     pub(crate) rendering_complete_semaphore: Semaphore,
     pub(crate) fence: Option<SignalingFence<SubmitResult>>,
     pub(crate) primary_command_buffer_handle: u64,
     pub(crate) secondary_command_buffers:
-        Vec<CommandBuffer<{ SECONDARY }, { INITIAL }, { OUTSIDE }, true>>,
+        Vec<CommandBuffer<{ SECONDARY }, { INITIAL }, { OUTSIDE }>>,
 }
 
 impl FrameStore {
     pub fn record<
         F: FnOnce(
-            &TextureAllocator,
-            &mut [CommandBuffer<{ SECONDARY }, { RECORDING }, { INSIDE }, true>],
+            &mut [CommandBuffer<{ SECONDARY }, { RECORDING }, { INSIDE }>],
         ) -> Result<(), yarvk::Result>,
     >(
         &mut self,
         swapchain: &mut Swapchain,
         present_queue: &mut Queue,
         image: &ContinuousImage,
-        texture_allocator: &TextureAllocator,
         f: F,
     ) -> Result<(), yarvk::Result> {
         let (signaled_fence, mut submit_result) = self.fence.take().unwrap().wait()?;
@@ -55,14 +50,13 @@ impl FrameStore {
         let primary_command_buffer = primary_command_buffer
             .record(|primary_command_buffer| {
                 primary_command_buffer.cmd_begin_render_pass(
-                    &self.renderpass_begin_info,
+                    self.renderpass_begin_info.clone(),
                     SubpassContents::SECONDARY_COMMAND_BUFFERS,
                     |primary_command_buffer| {
                         let mut secondary_buffers = CommandBuffer::<
                             { SECONDARY },
                             { INITIAL },
                             { OUTSIDE },
-                            true,
                         >::record_render_pass_continue_buffers(
                             std::mem::take(&mut self.secondary_command_buffers),
                             self.inheritance_info.clone(),
@@ -84,7 +78,7 @@ impl FrameStore {
                                         ..Default::default()
                                     });
                                 });
-                                f(texture_allocator, secondary_buffers)
+                                f(secondary_buffers)
                             },
                         )?;
                         primary_command_buffer.cmd_execute_commands(&mut secondary_buffers);

@@ -1,12 +1,14 @@
-use crate::queue_manager::recordable_queue::{RecordableQueue, ThreadLocalSecondaryBufferMap};
+use crate::renderer::queue_manager::recordable_queue::{
+    RecordableQueue, ThreadLocalSecondaryBufferMap,
+};
 use float_ord::FloatOrd;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use yarvk::command::command_buffer::Level::PRIMARY;
-
-use yarvk::command::command_pool::CommandPool;
 use yarvk::device::{Device, DeviceQueueCreateInfo};
+use yarvk::device_features::DeviceFeatures::FillModeNonSolid;
+use yarvk::device_features::PhysicalDeviceFeatures;
 use yarvk::extensions::{DeviceExtensionType, PhysicalInstanceExtensionType};
 use yarvk::fence::Fence;
 use yarvk::physical_device::queue_family_properties::QueueFamilyProperties;
@@ -51,7 +53,8 @@ impl QueueManager {
             .get_extension::<{ PhysicalInstanceExtensionType::KhrSurface }>()
             .unwrap();
         let mut device_builder = Device::builder(pdevice.clone())
-            .add_extension(&DeviceExtensionType::KhrSwapchain(surface_ext));
+            .add_extension(&DeviceExtensionType::KhrSwapchain(surface_ext))
+            .add_feature(FillModeNonSolid);
         let present_queue_family = present_queue_family.unwrap();
         let mut present_queue_create_info_builder =
             DeviceQueueCreateInfo::builder(present_queue_family.clone());
