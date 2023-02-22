@@ -1,24 +1,29 @@
-use crate::renderer::memory_allocator::MemoryBindingBuilder;
 use crate::renderer::rendering_function::frame_store::FrameStore;
 use crate::renderer::rendering_function::RenderingFunction;
-use crate::renderer::{MemoryAllocator, QueueManager};
-use rayon::current_num_threads;
+use crate::renderer::QueueManager;
+use rayon::iter::IndexedParallelIterator;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
+use tyleri_config::gpu_config::GpuConfig;
+use tyleri_gpu_utils::memory::array_device_memory::ArrayDeviceMemory;
+use tyleri_gpu_utils::memory::{try_memory_type, MemoryResource};
 use yarvk::command::command_buffer::Level::{PRIMARY, SECONDARY};
 use yarvk::command::command_buffer::RenderPassScope::INSIDE;
 use yarvk::command::command_buffer::State::RECORDING;
 use yarvk::command::command_buffer::{
     CommandBuffer, CommandBufferInheritanceInfo, TransientCommandBuffer,
 };
+use yarvk::device::Device;
+use yarvk::device_memory::IMemoryRequirements;
 use yarvk::fence::Fence;
 use yarvk::frame_buffer::Framebuffer;
 use yarvk::image_subresource_range::ImageSubresourceRange;
 use yarvk::image_view::{ImageView, ImageViewType};
 use yarvk::physical_device::SharingMode;
-use yarvk::pipeline::pipeline_stage_flags::PipelineStageFlags;
+use yarvk::pipeline::pipeline_cache::PipelineCacheImpl;
+use yarvk::pipeline::pipeline_stage_flags::{PipelineStageFlag, PipelineStageFlags};
 use yarvk::pipeline::{Pipeline, PipelineBuilder, PipelineLayout};
 use yarvk::queue::submit_info::SubmitResult;
 use yarvk::queue::Queue;
@@ -29,10 +34,10 @@ use yarvk::render_pass::RenderPass;
 use yarvk::semaphore::Semaphore;
 use yarvk::swapchain::Swapchain;
 use yarvk::{
-    AccessFlags, AttachmentLoadOp, AttachmentStoreOp, ClearColorValue, ClearDepthStencilValue,
-    ClearValue, ComponentMapping, ComponentSwizzle, ContinuousImage, Format, Handle,
-    ImageAspectFlags, ImageLayout, ImageTiling, ImageType, ImageUsageFlags, MemoryPropertyFlags,
-    SampleCountFlags, SUBPASS_EXTERNAL,
+    AccessFlags, AttachmentLoadOp, AttachmentStoreOp, BoundContinuousImage, ClearColorValue,
+    ClearDepthStencilValue, ClearValue, ComponentMapping, ComponentSwizzle, ContinuousImage,
+    Extent2D, Format, Handle, Image, ImageAspectFlags, ImageLayout, ImageTiling, ImageType,
+    ImageUsageFlags, MemoryPropertyFlags, SampleCountFlags, SUBPASS_EXTERNAL,
 };
 
 pub struct ForwardRenderingFunction {
@@ -43,10 +48,66 @@ pub struct ForwardRenderingFunction {
 }
 
 impl ForwardRenderingFunction {
+    fn create_depth_images(
+        device: &Arc<Device>,
+        config: &GpuConfig,
+        surface_resolution: Extent2D,
+        counts: usize,
+    ) -> Option<Vec<Arc<MemoryResource<Image>>>> {
+        let depth_image_format = config.depth_image_format;
+        let mut depth_image_builder = ContinuousImage::builder(device);
+        depth_image_builder.image_type(ImageType::TYPE_2D);
+        depth_image_builder.format(*depth_image_format);
+        depth_image_builder.extent(surface_resolution.into());
+        depth_image_builder.mip_levels(1);
+        depth_image_builder.array_layers(1);
+        depth_image_builder.samples(SampleCountFlags::TYPE_1);
+        depth_image_builder.tiling(ImageTiling::OPTIMAL);
+        depth_image_builder.usage(
+            ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | ImageUsageFlags::TRANSIENT_ATTACHMENT,
+        );
+        depth_image_builder.sharing_mode(SharingMode::EXCLUSIVE);
+        let depth_image = depth_image_builder.build().ok()?;
+        let memory_requirement = depth_image.get_memory_requirements();
+        let result = try_memory_type(
+            memory_requirement,
+            device.physical_device.memory_properties(),
+            Some(MemoryPropertyFlags::LAZILY_ALLOCATED),
+            memory_requirement.size * counts as u64,
+            |memory_type| {
+                return ArrayDeviceMemory::new_resources(
+                    &device,
+                    &depth_image_builder,
+                    counts,
+                    &memory_type,
+                )
+                .ok();
+            },
+        );
+        if let Some(images) = result {
+            return Some(images);
+        } else {
+            try_memory_type(
+                memory_requirement,
+                device.physical_device.memory_properties(),
+                None,
+                memory_requirement.size * counts as u64,
+                |memory_type| {
+                    return ArrayDeviceMemory::new_resources(
+                        &device,
+                        &depth_image_builder,
+                        counts,
+                        &memory_type,
+                    )
+                    .ok();
+                },
+            )
+        }
+    }
     pub(crate) fn new(
+        config: &GpuConfig,
         swapchain: &Swapchain,
         queue_manager: &mut QueueManager,
-        allocator: &Arc<MemoryAllocator>,
     ) -> Result<Self, yarvk::Result> {
         let device = &swapchain.device;
         let present_images = swapchain.get_swapchain_images();
@@ -54,7 +115,7 @@ impl ForwardRenderingFunction {
 
         let surface_resolution = swapchain.image_extent;
 
-        let renderpass = RenderPass::builder(device.clone())
+        let renderpass = RenderPass::builder(&device)
             .add_attachment(
                 AttachmentDescription::builder()
                     .format(surface_format.format)
@@ -92,31 +153,23 @@ impl ForwardRenderingFunction {
             .add_dependency(
                 SubpassDependency::builder()
                     .src_subpass(SUBPASS_EXTERNAL)
-                    .add_src_stage_mask(PipelineStageFlags::ColorAttachmentOutput)
-                    .add_dst_stage_mask(PipelineStageFlags::ColorAttachmentOutput)
+                    .add_src_stage_mask(PipelineStageFlag::ColorAttachmentOutput.into())
+                    .add_dst_stage_mask(PipelineStageFlag::ColorAttachmentOutput.into())
                     .dst_access_mask(
                         AccessFlags::COLOR_ATTACHMENT_READ | AccessFlags::COLOR_ATTACHMENT_WRITE,
                     )
                     .build(),
             )
             .build()?;
+        let depth_images =
+            Self::create_depth_images(device, config, surface_resolution, present_images.len())
+                .expect("no available memories for creating depth image");
         let frame_stores = present_images
-            .iter()
-            .map(|image| {
+            .par_iter()
+            .enumerate()
+            .map(|(index, image)| {
                 // depth image
-                let depth_image = ContinuousImage::builder(device.clone())
-                    .image_type(ImageType::TYPE_2D)
-                    .format(Format::D16_UNORM)
-                    .extent(surface_resolution.into())
-                    .mip_levels(1)
-                    .array_layers(1)
-                    .samples(SampleCountFlags::TYPE_1)
-                    .tiling(ImageTiling::OPTIMAL)
-                    .usage(ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
-                    .sharing_mode(SharingMode::EXCLUSIVE)
-                    .build_and_bind(allocator, MemoryPropertyFlags::DEVICE_LOCAL, false)?;
-
-                let depth_image_view = ImageView::builder(depth_image.clone())
+                let depth_image_view = ImageView::builder(depth_images[index].clone())
                     .subresource_range(
                         ImageSubresourceRange::builder()
                             .aspect_mask(ImageAspectFlags::DEPTH)
@@ -124,10 +177,9 @@ impl ForwardRenderingFunction {
                             .layer_count(1)
                             .build(),
                     )
-                    .format(depth_image.image_create_info.format)
+                    .format(*config.depth_image_format.clone())
                     .view_type(ImageViewType::Type2d)
                     .build()?;
-
                 let image_view = ImageView::builder(image.clone())
                     .view_type(ImageViewType::Type2d)
                     .format(surface_format.format)
@@ -153,7 +205,7 @@ impl ForwardRenderingFunction {
                     .width(surface_resolution.width)
                     .height(surface_resolution.height)
                     .layers(1)
-                    .build(device.clone())?;
+                    .build(device)?;
                 let mut submit_result = SubmitResult::default();
                 let present_queue_family = queue_manager.get_present_queue_family();
                 let primary_command_buffer = TransientCommandBuffer::<{ PRIMARY }>::new(
@@ -162,7 +214,7 @@ impl ForwardRenderingFunction {
                 )
                 .unwrap();
                 let primary_command_buffer_handle = primary_command_buffer.handle();
-                let secondary_command_buffers = [0..current_num_threads()]
+                let secondary_command_buffers = [0..rayon::current_num_threads()]
                     .par_iter()
                     .map(|_| {
                         TransientCommandBuffer::<{ SECONDARY }>::new(
@@ -173,7 +225,7 @@ impl ForwardRenderingFunction {
                     })
                     .collect();
                 submit_result.add_primary_buffer(primary_command_buffer);
-                let fence = Fence::new_signaling(device.clone(), submit_result)?;
+                let fence = Fence::new_signaling(device, submit_result)?;
                 let renderpass_begin_info = Arc::new(
                     RenderPassBeginInfo::builder(renderpass.clone(), framebuffer.clone())
                         .render_area(surface_resolution.into())
@@ -197,8 +249,8 @@ impl ForwardRenderingFunction {
                 let frame_store = FrameStore {
                     renderpass_begin_info,
                     inheritance_info,
-                    present_complete_semaphore: Semaphore::new(device.clone())?,
-                    rendering_complete_semaphore: Semaphore::new(device.clone())?,
+                    present_complete_semaphore: Semaphore::new(device)?,
+                    rendering_complete_semaphore: Semaphore::new(device)?,
                     fence: Some(fence),
                     primary_command_buffer_handle,
                     secondary_command_buffers,
@@ -210,13 +262,13 @@ impl ForwardRenderingFunction {
         Ok(Self {
             render_pass: renderpass,
             frame_stores,
-            present_complete_semaphore: Semaphore::new(device.clone())?,
+            present_complete_semaphore: Semaphore::new(device)?,
         })
     }
     fn acquire_next_image(
         &mut self,
         swapchian: &mut Swapchain,
-    ) -> Result<(&mut FrameStore, Arc<ContinuousImage>), yarvk::Result> {
+    ) -> Result<(&mut FrameStore, Arc<BoundContinuousImage>), yarvk::Result> {
         let next_image = swapchian
             .acquire_next_image_semaphore_only(u64::MAX, &self.present_complete_semaphore)?;
         let frame_store = self.frame_stores.get_mut(&next_image.handle()).unwrap();
@@ -244,7 +296,14 @@ impl RenderingFunction for ForwardRenderingFunction {
         Ok(())
     }
 
-    fn pipeline_builder(&self, layout: Arc<PipelineLayout>, _subpass: u32) -> PipelineBuilder {
-        Pipeline::builder(layout).render_pass(self.render_pass.clone(), 0)
+    fn pipeline_builder<'a>(
+        &'a self,
+        layout: Arc<PipelineLayout>,
+        pipeline_cache: &'a PipelineCacheImpl<false>,
+        _subpass: u32,
+    ) -> PipelineBuilder<'a> {
+        Pipeline::builder(layout)
+            .pipeline_cache(pipeline_cache)
+            .render_pass(self.render_pass.clone(), 0)
     }
 }

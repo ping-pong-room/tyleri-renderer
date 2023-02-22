@@ -4,13 +4,13 @@ use yarvk::command::command_buffer::RenderPassScope::{INSIDE, OUTSIDE};
 use yarvk::command::command_buffer::State::{INITIAL, RECORDING};
 use yarvk::command::command_buffer::{CommandBuffer, CommandBufferInheritanceInfo};
 use yarvk::fence::SignalingFence;
-use yarvk::pipeline::pipeline_stage_flags::PipelineStageFlags;
+use yarvk::pipeline::pipeline_stage_flags::{PipelineStageFlag, PipelineStageFlags};
 use yarvk::queue::submit_info::{SubmitInfo, SubmitResult, Submittable};
 use yarvk::queue::Queue;
 use yarvk::render_pass::render_pass_begin_info::RenderPassBeginInfo;
 use yarvk::semaphore::Semaphore;
 use yarvk::swapchain::{PresentInfo, Swapchain};
-use yarvk::{ContinuousImage, Rect2D, SubpassContents, Viewport};
+use yarvk::{BoundContinuousImage, ContinuousImage, Rect2D, SubpassContents, Viewport};
 
 pub(crate) struct FrameStore {
     pub(crate) renderpass_begin_info: Arc<RenderPassBeginInfo>,
@@ -32,10 +32,10 @@ impl FrameStore {
         &mut self,
         swapchain: &mut Swapchain,
         present_queue: &mut Queue,
-        image: &ContinuousImage,
+        image: &BoundContinuousImage,
         f: F,
     ) -> Result<(), yarvk::Result> {
-        let (signaled_fence, mut submit_result) = self.fence.take().unwrap().wait()?;
+        let (signaled_fence, mut submit_result) = self.fence.take().unwrap().wait().unwrap();
         let fence = signaled_fence.reset()?;
         let mut primary_command_buffer = submit_result
             .take_invalid_primary_buffer(&self.primary_command_buffer_handle)
@@ -94,7 +94,7 @@ impl FrameStore {
         let submit_info = SubmitInfo::builder()
             .add_wait_semaphore(
                 &mut self.present_complete_semaphore,
-                PipelineStageFlags::BottomOfPipe,
+                PipelineStageFlag::BottomOfPipe.into(),
             )
             .add_one_time_submit_command_buffer(primary_command_buffer)
             .add_signal_semaphore(&mut self.rendering_complete_semaphore)

@@ -1,22 +1,13 @@
-use crate::renderer::queue_manager::recordable_queue::{
-    RecordableQueue, ThreadLocalSecondaryBufferMap,
-};
 use float_ord::FloatOrd;
 use std::collections::BTreeMap;
 use std::sync::Arc;
-
-use yarvk::command::command_buffer::Level::PRIMARY;
+use tyleri_gpu_utils::queue::parallel_recording_queue::ParallelRecordingQueue;
 use yarvk::device::{Device, DeviceQueueCreateInfo};
 use yarvk::device_features::DeviceFeatures::FillModeNonSolid;
-use yarvk::device_features::PhysicalDeviceFeatures;
 use yarvk::extensions::{DeviceExtensionType, PhysicalInstanceExtensionType};
-use yarvk::fence::Fence;
 use yarvk::physical_device::queue_family_properties::QueueFamilyProperties;
 use yarvk::physical_device::PhysicalDevice;
-
 use yarvk::QueueFlags;
-
-pub mod recordable_queue;
 
 const PRESENT_QUEUE_PRIORITY: f32 = 1.0;
 const TRANSFER_QUEUE_PRIORITY: f32 = 0.9;
@@ -25,9 +16,9 @@ pub struct QueueManager {
     device: Arc<Device>,
     present_queues: (
         QueueFamilyProperties,
-        BTreeMap<FloatOrd<f32> /*priority*/, RecordableQueue>,
+        BTreeMap<FloatOrd<f32> /*priority*/, ParallelRecordingQueue>,
     ),
-    transfer_queues: Option<(QueueFamilyProperties, Vec<RecordableQueue>)>,
+    transfer_queues: Option<(QueueFamilyProperties, Vec<ParallelRecordingQueue>)>,
 }
 
 impl QueueManager {
@@ -52,7 +43,7 @@ impl QueueManager {
             .instance
             .get_extension::<{ PhysicalInstanceExtensionType::KhrSurface }>()
             .unwrap();
-        let mut device_builder = Device::builder(pdevice.clone())
+        let mut device_builder = Device::builder(&pdevice)
             .add_extension(&DeviceExtensionType::KhrSwapchain(surface_ext))
             .add_feature(FillModeNonSolid);
         let present_queue_family = present_queue_family.unwrap();
@@ -81,14 +72,19 @@ impl QueueManager {
         let present_queues = queues.remove(present_queue_family).unwrap();
         let present_queues = present_queues
             .into_iter()
-            .map(|queue| Ok((FloatOrd(queue.priority), RecordableQueue::new(queue)?)))
+            .map(|queue| {
+                Ok((
+                    FloatOrd(queue.priority),
+                    ParallelRecordingQueue::new(queue)?,
+                ))
+            })
             .collect::<Result<_, yarvk::Result>>()?;
         let present_queues = (present_queue_family.clone(), present_queues);
         let transfer_queues = if let Some(transfer_queue_family) = transfer_queue_family {
             let transfer_queues = queues.remove(transfer_queue_family).unwrap();
             let transfer_queues = transfer_queues
                 .into_iter()
-                .map(|queue| RecordableQueue::new(queue))
+                .map(|queue| ParallelRecordingQueue::new(queue))
                 .collect::<Result<Vec<_>, yarvk::Result>>()?;
             Some((transfer_queue_family.clone(), transfer_queues))
         } else {
@@ -105,7 +101,7 @@ impl QueueManager {
         &self.present_queues.0
     }
 
-    pub fn take_present_queue_priority_high(&mut self) -> Option<RecordableQueue> {
+    pub fn take_present_queue_priority_high(&mut self) -> Option<ParallelRecordingQueue> {
         match self.present_queues.1.iter().next() {
             None => None,
             Some((priority, _)) => {
@@ -115,7 +111,7 @@ impl QueueManager {
         }
     }
 
-    pub fn take_present_queue_priority_low(&mut self) -> Option<RecordableQueue> {
+    pub fn take_present_queue_priority_low(&mut self) -> Option<ParallelRecordingQueue> {
         match self.present_queues.1.iter().next_back() {
             None => None,
             Some((priority, _)) => {
@@ -125,7 +121,7 @@ impl QueueManager {
         }
     }
 
-    pub fn take_transfer_queue(&mut self) -> Option<RecordableQueue> {
+    pub fn take_transfer_queue(&mut self) -> Option<ParallelRecordingQueue> {
         if let Some((_, queues)) = &mut self.transfer_queues {
             queues.pop()
         } else {
@@ -133,7 +129,7 @@ impl QueueManager {
         }
     }
 
-    pub fn push_queue(&mut self, queue: RecordableQueue) {
+    pub fn push_queue(&mut self, queue: ParallelRecordingQueue) {
         if queue.queue_family_property == self.present_queues.0 {
             self.present_queues
                 .1
