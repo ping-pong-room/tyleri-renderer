@@ -6,13 +6,14 @@ edition = "2021"
 [dependencies]
 yarvk = { path = "../yarvk/yarvk" }
 tyleri-gpu-utils = { path = "../tyleri-gpu-utils" }
-tyleri-config = { path = "../tyleri-config" }
-float-ord = "0.3.2"
+tyleri-api = { path = "../tyleri-api" }
 derive_more = "0.99.17"
 rustc-hash = "1.1.0"
 parking_lot = "0.12.1"
-raw-window-handle = "0.4.3"
+raw-window-handle = "0.3"
 rayon = "1.5.3"
 dashmap = "5.4.0"
+crossbeam-queue = "0.3.8"
+glam = "0.23.0"
 
 [dev-dependencies]
