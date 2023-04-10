@@ -71,9 +71,8 @@ impl<T: RenderingFunction> Renderer<T> {
         }
     }
     pub fn render(&mut self, render_scene: &RenderScene) {
-        let queue = &mut self.render_device.present_queue;
         for window in &mut self.windows {
-            window.present(queue, &render_scene);
+            window.present(&mut self.render_device, &render_scene);
         }
     }
     pub fn on_resolution_changed(&mut self, window: &dyn HasRawWindowHandle, resolution: Extent2D) {

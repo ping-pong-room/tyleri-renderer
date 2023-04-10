@@ -17,6 +17,7 @@ pub trait RenderingFunction {
     fn new(render_device: &RenderDevice, swapchain: &ImageViewSwapchain) -> Self;
     fn record(
         &mut self,
+        render_device: &RenderDevice,
         image: &Arc<BoundContinuousImage>,
         command_buffer: CommandBuffer<{ PRIMARY }, { INVALID }, { OUTSIDE }>,
         render_scene: &RenderScene,

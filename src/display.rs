@@ -1,17 +1,18 @@
-use crate::display::swapchain::{ImageViewSwapchain, PresentImageView};
-use crate::render_device::RenderDevice;
-use crate::render_objects::RenderScene;
-use crate::rendering_function::RenderingFunction;
+use std::sync::Arc;
+
 use raw_window_handle::RawWindowHandle;
 use rustc_hash::FxHashMap;
-use std::sync::Arc;
 use yarvk::pipeline::pipeline_stage_flags::PipelineStageFlag;
 use yarvk::queue::submit_info::{SubmitInfo, Submittable};
-use yarvk::queue::Queue;
 use yarvk::semaphore::Semaphore;
 use yarvk::surface::Surface;
 use yarvk::swapchain::PresentInfo;
 use yarvk::{Extent2D, Handle};
+
+use crate::display::swapchain::{ImageViewSwapchain, PresentImageView};
+use crate::render_device::RenderDevice;
+use crate::render_objects::RenderScene;
+use crate::rendering_function::RenderingFunction;
 
 pub mod swapchain;
 
@@ -55,7 +56,7 @@ impl<T: RenderingFunction> Display<T> {
             rendering_function,
         }
     }
-    pub fn present(&mut self, present_queue: &mut Queue, render_scene: &RenderScene) {
+    pub fn present(&mut self, render_device: &mut RenderDevice, render_scene: &RenderScene) {
         let present_image_view = self.swapchain.take_view();
         let image = present_image_view.image;
         let command_buffer_handle = present_image_view.command_buffer_handle;
@@ -70,6 +71,7 @@ impl<T: RenderingFunction> Display<T> {
             .take_invalid_primary_buffer(&command_buffer_handle)
             .expect("internal error: no command buffer found in result");
         let command_buffer = self.rendering_function.record(
+            render_device,
             &image,
             command_buffer,
             render_scene,
@@ -83,6 +85,7 @@ impl<T: RenderingFunction> Display<T> {
             .add_one_time_submit_command_buffer(command_buffer)
             .add_signal_semaphore(rendering_complete_semaphore)
             .build();
+        let present_queue = &mut render_device.present_queue;
         let signaling_fence = Submittable::new()
             .add_submit_info(submit_info)
             .submit(present_queue, fence)

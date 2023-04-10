@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use crate::pipeline::single_image_descriptor_set_layout::SingleImageDescriptorValue;
 use tyleri_gpu_utils::image::format::FormatSize;
+use tyleri_gpu_utils::memory::block_based_memory::bindless_buffer::BindlessBuffer;
 use tyleri_gpu_utils::memory::memory_updater::MemoryUpdater;
-use tyleri_gpu_utils::memory::{try_memory_type, IMemBakBuf, IMemBakImg, MemoryObjectBuilder};
+use tyleri_gpu_utils::memory::{try_memory_type, IMemBakImg, MemoryObjectBuilder};
 use yarvk::descriptor_set::descriptor_set::DescriptorSet;
 use yarvk::device::Device;
 use yarvk::device_memory::IMemoryRequirements;
@@ -19,20 +19,21 @@ use yarvk::{
     Offset3D, SampleCountFlags,
 };
 
+use crate::pipeline::single_image_descriptor_set_layout::SingleImageDescriptorValue;
 use crate::rendering_function::RenderingFunction;
 use crate::Renderer;
 
 pub mod resource_allocator;
 
 pub struct ResCreateInfo<T: MemoryObjectBuilder> {
-    builder: T,
-    memory_type: MemoryType,
+    pub builder: T,
+    pub memory_type: MemoryType,
 }
 
 pub struct ResourcesInfo {
-    vertices_info: ResCreateInfo<ContinuousBufferBuilder>,
-    indices_info: ResCreateInfo<ContinuousBufferBuilder>,
-    texture_info: ResCreateInfo<ContinuousImageBuilder>,
+    pub vertices_info: ResCreateInfo<ContinuousBufferBuilder>,
+    pub indices_info: ResCreateInfo<ContinuousBufferBuilder>,
+    pub texture_info: ResCreateInfo<ContinuousImageBuilder>,
 }
 
 impl ResourcesInfo {
@@ -124,40 +125,20 @@ impl<T: RenderingFunction> Renderer<T> {
     pub fn create_vertices(
         &self,
         data: &[(u64 /*size*/, Arc<dyn Fn(&mut [u8]) + Send + Sync>)],
-    ) -> Vec<Arc<IMemBakBuf>> {
-        let builder = self
-            .render_device
+    ) -> Vec<Arc<BindlessBuffer>> {
+        self.render_device
             .memory_allocator
-            .resource_infos
-            .vertices_info
-            .builder
-            .clone();
-        let memory_type = &self
-            .render_device
-            .memory_allocator
-            .resource_infos
-            .vertices_info
-            .memory_type;
-        self.create_buffer(builder, memory_type, data)
+            .vertices_buffer
+            .allocate(data, &mut self.render_device.memory_allocator.queue.lock())
     }
     pub fn create_indices(
         &self,
         data: &[(u64 /*size*/, Arc<dyn Fn(&mut [u8]) + Send + Sync>)],
-    ) -> Vec<Arc<IMemBakBuf>> {
-        let builder = self
-            .render_device
+    ) -> Vec<Arc<BindlessBuffer>> {
+        self.render_device
             .memory_allocator
-            .resource_infos
-            .indices_info
-            .builder
-            .clone();
-        let memory_type = &self
-            .render_device
-            .memory_allocator
-            .resource_infos
-            .indices_info
-            .memory_type;
-        self.create_buffer(builder, memory_type, data)
+            .indices_buffer
+            .allocate(data, &mut self.render_device.memory_allocator.queue.lock())
     }
     pub fn create_textures(
         &self,
@@ -223,39 +204,6 @@ impl<T: RenderingFunction> Renderer<T> {
             .into_iter()
             .map(|descriptor_set| Arc::new(descriptor_set))
             .collect()
-    }
-    fn create_buffer(
-        &self,
-        mut builder: ContinuousBufferBuilder,
-        memory_type: &MemoryType,
-        data: &[(u64 /*size*/, Arc<dyn Fn(&mut [u8]) + Send + Sync>)],
-    ) -> Vec<Arc<IMemBakBuf>> {
-        let mut total_size = 0;
-        for (size, _) in data {
-            total_size += size;
-        }
-        let it = data.iter().map(|(size, _)| {
-            builder.size(*size);
-            builder.build().unwrap()
-        });
-        let allocator = self
-            .render_device
-            .memory_allocator
-            .get_block_based_allocator(memory_type);
-        let mut buffers = allocator.par_allocate(it, Some(total_size)).unwrap();
-        let updater = MemoryUpdater::default();
-        buffers.iter_mut().enumerate().for_each(|(index, buffer)| {
-            updater.add_buffer(
-                buffer,
-                0,
-                buffer.size(),
-                AccessFlags::SHADER_READ,
-                PipelineStageFlag::VertexShader.into(),
-                data[index].1.clone(),
-            )
-        });
-        updater.update(&mut self.render_device.memory_allocator.queue.lock());
-        buffers
     }
     fn create_image(
         &self,

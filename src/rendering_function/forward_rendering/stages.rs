@@ -1,10 +1,11 @@
+use crate::render_device::RenderDevice;
 use rayon::iter::ParallelIterator;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator};
 use yarvk::command::command_buffer::CommandBuffer;
 use yarvk::command::command_buffer::Level::SECONDARY;
 use yarvk::command::command_buffer::RenderPassScope::INSIDE;
 use yarvk::command::command_buffer::State::RECORDING;
-use yarvk::PipelineBindPoint;
+use yarvk::{IndexType, PipelineBindPoint};
 
 use crate::render_objects::camera::Camera;
 use crate::render_objects::RenderScene;
@@ -33,6 +34,7 @@ impl ForwardRenderingFunction {
     }
     pub(super) fn on_render_meshes(
         &self,
+        render_device: &RenderDevice,
         camera: &Camera,
         render_scene: &RenderScene,
         secondary_command_buffers: &mut [CommandBuffer<{ SECONDARY }, { RECORDING }, { INSIDE }>],
@@ -44,6 +46,16 @@ impl ForwardRenderingFunction {
             .par_iter_mut()
             .enumerate()
             .for_each(|(index, command_buffer)| {
+                command_buffer.cmd_bind_vertex_buffers(
+                    0,
+                    [render_device.memory_allocator.vertices_buffer.get_buffer() as _],
+                    &[0],
+                );
+                command_buffer.cmd_bind_index_buffer(
+                    render_device.memory_allocator.indices_buffer.get_buffer() as _,
+                    0,
+                    IndexType::UINT32,
+                );
                 mesh_group[index].iter().for_each(|mesh_renderer| {
                     mesh_renderer.renderer_mesh(
                         &self.common_pipeline.pipeline,

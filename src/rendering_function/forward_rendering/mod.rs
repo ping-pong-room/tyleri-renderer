@@ -252,6 +252,7 @@ impl RenderingFunction for ForwardRenderingFunction {
 
     fn record(
         &mut self,
+        render_device: &RenderDevice,
         image: &Arc<BoundContinuousImage>,
         mut primary_command_buffer: CommandBuffer<{ PRIMARY }, { INVALID }, { OUTSIDE }>,
         render_scene: &RenderScene,
@@ -274,7 +275,7 @@ impl RenderingFunction for ForwardRenderingFunction {
             frame_store.renderpass_begin_info.clone(),
             SubpassContents::SECONDARY_COMMAND_BUFFERS,
         );
-        let mut secondary_buffers = CommandBuffer::<{ SECONDARY }, { INITIAL }, { OUTSIDE }>
+        let secondary_buffers = CommandBuffer::<{ SECONDARY }, { INITIAL }, { OUTSIDE }>
         ::record_render_pass_continue_buffers(
             secondary_buffers,
             frame_store.inheritance_info.clone(),
@@ -286,12 +287,12 @@ impl RenderingFunction for ForwardRenderingFunction {
                 }
                 for camera in cameras {
                     self.on_start(camera, secondary_buffers);
-                    self.on_render_meshes(camera, &render_scene, secondary_buffers);
+                    self.on_render_meshes(render_device,camera, &render_scene, secondary_buffers);
                 }
                 Ok(())
             },
         ).unwrap();
-        primary_command_buffer.cmd_execute_commands(&mut secondary_buffers);
+        primary_command_buffer.cmd_execute_commands(secondary_buffers);
         let primary_command_buffer = primary_command_buffer.cmd_end_render_pass();
         let primary_command_buffer = primary_command_buffer.end().unwrap();
         primary_command_buffer
