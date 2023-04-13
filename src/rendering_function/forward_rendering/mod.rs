@@ -1,15 +1,14 @@
 use std::sync::Arc;
 
-use raw_window_handle::RawWindowHandle;
-use rayon::iter::IndexedParallelIterator;
-use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
+use rayon::iter::{IndexedParallelIterator, IntoParallelRefMutIterator};
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator};
 use rustc_hash::FxHashMap;
 use tyleri_gpu_utils::memory::array_device_memory::ArrayDeviceMemory;
 use tyleri_gpu_utils::memory::{try_memory_type, IMemBakImg};
 use yarvk::command::command_buffer::Level::{PRIMARY, SECONDARY};
 use yarvk::command::command_buffer::RenderPassScope::OUTSIDE;
-use yarvk::command::command_buffer::State::{EXECUTABLE, INITIAL, INVALID};
+use yarvk::command::command_buffer::State::{EXECUTABLE, INITIAL};
 use yarvk::command::command_buffer::{CommandBuffer, CommandBufferInheritanceInfo};
 use yarvk::device_memory::IMemoryRequirements;
 use yarvk::frame_buffer::Framebuffer;
@@ -23,28 +22,31 @@ use yarvk::render_pass::render_pass_begin_info::RenderPassBeginInfo;
 use yarvk::render_pass::subpass::{SubpassDependency, SubpassDescription};
 use yarvk::render_pass::RenderPass;
 use yarvk::{
-    AccessFlags, AttachmentLoadOp, AttachmentStoreOp, BoundContinuousImage, ClearColorValue,
-    ClearDepthStencilValue, ClearValue, ComponentMapping, ComponentSwizzle, ContinuousImage,
-    Extent2D, Format, Handle, ImageAspectFlags, ImageLayout, ImageTiling, ImageType,
-    ImageUsageFlags, MemoryPropertyFlags, SampleCountFlags, SubpassContents, SUBPASS_EXTERNAL,
+    AccessFlags, AttachmentLoadOp, AttachmentStoreOp, ClearColorValue, ClearDepthStencilValue,
+    ClearValue, ComponentMapping, ComponentSwizzle, ContinuousImage, Extent2D, Format, Handle,
+    ImageAspectFlags, ImageLayout, ImageTiling, ImageType, ImageUsageFlags, MemoryPropertyFlags,
+    SampleCountFlags, SubpassContents, SUBPASS_EXTERNAL,
 };
 
-use crate::display::swapchain::ImageViewSwapchain;
 use crate::pipeline::common_pipeline::CommonPipeline;
+use crate::pipeline::ui_pipeline::UIPipeline;
 use crate::render_device::RenderDevice;
-use crate::render_objects::RenderScene;
+use crate::render_scene::RenderResources;
+use crate::render_window::swapchain::ImageViewSwapchain;
+use crate::render_window::ImageHandle;
 use crate::rendering_function::RenderingFunction;
 
 mod stages;
 
-struct FrameStore {
-    pub(crate) renderpass_begin_info: Arc<RenderPassBeginInfo>,
+pub(crate) struct FrameStore {
+    pub(crate) render_pass_begin_info: Arc<RenderPassBeginInfo>,
     pub(crate) inheritance_info: Arc<CommandBufferInheritanceInfo>,
 }
 
 pub struct ForwardRenderingFunction {
     frame_stores: FxHashMap<u64 /*command buffer handler*/, FrameStore>,
     common_pipeline: CommonPipeline,
+    ui_pipeline: UIPipeline,
 }
 
 impl ForwardRenderingFunction {
@@ -210,7 +212,7 @@ impl RenderingFunction for ForwardRenderingFunction {
                     .layers(1)
                     .build(device)
                     .unwrap();
-                let renderpass_begin_info = Arc::new(
+                let render_pass_begin_info = Arc::new(
                     RenderPassBeginInfo::builder(render_pass.clone(), framebuffer.clone())
                         .render_area(surface_resolution.into())
                         .add_clear_value(ClearValue {
@@ -231,14 +233,20 @@ impl RenderingFunction for ForwardRenderingFunction {
                     .subpass(0)
                     .build();
                 let frame_store = FrameStore {
-                    renderpass_begin_info,
+                    render_pass_begin_info,
                     inheritance_info,
                 };
                 Ok((image.handle(), frame_store))
             })
-            .collect::<Result<FxHashMap<u64, FrameStore>, yarvk::Result>>()
+            .collect::<Result<FxHashMap<ImageHandle, FrameStore>, yarvk::Result>>()
             .unwrap();
         let common_pipeline = CommonPipeline::new(
+            &render_device.single_image_descriptor_set_layout,
+            PipelineCacheType::InternallySynchronized(&render_device.pipeline_cache),
+            &render_pass,
+            0,
+        );
+        let ui_pipeline = UIPipeline::new(
             &render_device.single_image_descriptor_set_layout,
             PipelineCacheType::InternallySynchronized(&render_device.pipeline_cache),
             &render_pass,
@@ -247,52 +255,72 @@ impl RenderingFunction for ForwardRenderingFunction {
         Self {
             frame_stores,
             common_pipeline,
+            ui_pipeline,
         }
     }
 
     fn record(
         &mut self,
         render_device: &RenderDevice,
-        image: &Arc<BoundContinuousImage>,
-        mut primary_command_buffer: CommandBuffer<{ PRIMARY }, { INVALID }, { OUTSIDE }>,
-        render_scene: &RenderScene,
-        window: &RawWindowHandle,
+        image_handle: &ImageHandle,
+        primary_command_buffer: CommandBuffer<{ PRIMARY }, { INITIAL }, { OUTSIDE }>,
+        secondary_command_buffer: Vec<CommandBuffer<{ SECONDARY }, { INITIAL }, { OUTSIDE }>>,
+        render_details: &RenderResources,
+        scale_factor: f64,
+        window_size: Extent2D,
     ) -> CommandBuffer<{ PRIMARY }, { EXECUTABLE }, { OUTSIDE }> {
         let frame_store = self
             .frame_stores
-            .get(&image.handle())
+            .get(image_handle)
             .expect("internal error: frame store not exist");
-        let mut secondary_buffers =
-            Vec::with_capacity(primary_command_buffer.secondary_buffers().len());
-        while let Some(secondary_buffer) = primary_command_buffer.secondary_buffers().pop() {
-            let secondary_buffer = secondary_buffer.reset().unwrap();
-            secondary_buffers.push(secondary_buffer);
-        }
-        let primary_command_buffer = primary_command_buffer.reset().unwrap();
         let primary_command_buffer = primary_command_buffer.begin().unwrap();
-
         let mut primary_command_buffer = primary_command_buffer.cmd_begin_render_pass(
-            frame_store.renderpass_begin_info.clone(),
+            frame_store.render_pass_begin_info.clone(),
             SubpassContents::SECONDARY_COMMAND_BUFFERS,
         );
-        let secondary_buffers = CommandBuffer::<{ SECONDARY }, { INITIAL }, { OUTSIDE }>
-        ::record_render_pass_continue_buffers(
-            secondary_buffers,
-            frame_store.inheritance_info.clone(),
-            |secondary_buffers| {
-                let cameras = render_scene.get_cameras(window).expect("internal error: required window do not exit");
-                // TODO warning in debug, and using log
-                if cameras.is_empty() {
-                    println!("no cameras");
-                }
-                for camera in cameras {
-                    self.on_start(camera, secondary_buffers);
-                    self.on_render_meshes(render_device,camera, &render_scene, secondary_buffers);
-                }
-                Ok(())
-            },
-        ).unwrap();
-        primary_command_buffer.cmd_execute_commands(secondary_buffers);
+
+        let mut secondary_command_buffers: Vec<_> = secondary_command_buffer
+            .into_par_iter()
+            .map(|secondary_command_buffer| {
+                secondary_command_buffer
+                    .begin(frame_store.inheritance_info.clone())
+                    .unwrap()
+            })
+            .collect();
+        // TODO order and execute all command at in parallel at once
+        self.on_render_ui(
+            window_size,
+            scale_factor,
+            render_details,
+            &mut secondary_command_buffers[0],
+        );
+        let cameras = render_details.cameras.as_slice();
+        // TODO warning in debug, and using log
+        if cameras.is_empty() {
+            println!("no cameras");
+        }
+        for camera in cameras {
+            let mesh_renderers = camera.get_and_order_meshes(render_details);
+            secondary_command_buffers
+                .par_iter_mut()
+                .enumerate()
+                .for_each(|(index, command_buffer)| {
+                    self.on_start(camera, command_buffer);
+                    self.on_render_meshes(
+                        render_device,
+                        camera,
+                        &mesh_renderers,
+                        index,
+                        command_buffer,
+                    );
+                });
+        }
+
+        let secondary_command_buffer: Vec<_> = secondary_command_buffers
+            .into_par_iter()
+            .map(|secondary_command_buffer| secondary_command_buffer.end().unwrap())
+            .collect();
+        primary_command_buffer.cmd_execute_commands(secondary_command_buffer);
         let primary_command_buffer = primary_command_buffer.cmd_end_render_pass();
         let primary_command_buffer = primary_command_buffer.end().unwrap();
         primary_command_buffer

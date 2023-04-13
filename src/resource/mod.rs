@@ -1,158 +1,70 @@
 use std::sync::Arc;
 
+use tyleri_api::data_structure::vertices::Vertex;
 use tyleri_gpu_utils::image::format::FormatSize;
 use tyleri_gpu_utils::memory::block_based_memory::bindless_buffer::BindlessBuffer;
 use tyleri_gpu_utils::memory::memory_updater::MemoryUpdater;
-use tyleri_gpu_utils::memory::{try_memory_type, IMemBakImg, MemoryObjectBuilder};
+use tyleri_gpu_utils::memory::IMemBakImg;
 use yarvk::descriptor_set::descriptor_set::DescriptorSet;
-use yarvk::device::Device;
-use yarvk::device_memory::IMemoryRequirements;
 use yarvk::image_subresource_range::ImageSubresourceRange;
 use yarvk::image_view::{ImageView, ImageViewType};
 use yarvk::physical_device::memory_properties::MemoryType;
 use yarvk::physical_device::SharingMode;
 use yarvk::pipeline::pipeline_stage_flags::PipelineStageFlag;
 use yarvk::{
-    AccessFlags, BufferUsageFlags, ComponentMapping, ComponentSwizzle, ContinuousBuffer,
-    ContinuousBufferBuilder, ContinuousImage, ContinuousImageBuilder, Extent2D, Extent3D, Format,
-    ImageAspectFlags, ImageLayout, ImageSubresourceLayers, ImageTiling, ImageType, ImageUsageFlags,
-    Offset3D, SampleCountFlags,
+    AccessFlags, ComponentMapping, ComponentSwizzle, ContinuousImage, ContinuousImageBuilder,
+    Extent2D, Extent3D, Format, ImageAspectFlags, ImageLayout, ImageSubresourceLayers, ImageTiling,
+    ImageType, ImageUsageFlags, Offset3D, SampleCountFlags,
 };
 
 use crate::pipeline::single_image_descriptor_set_layout::SingleImageDescriptorValue;
-use crate::rendering_function::RenderingFunction;
-use crate::Renderer;
+use crate::render_device::RenderDevice;
 
 pub mod resource_allocator;
+mod resource_info;
 
-pub struct ResCreateInfo<T: MemoryObjectBuilder> {
-    pub builder: T,
-    pub memory_type: MemoryType,
-}
+pub type StaticVertices = BindlessBuffer<Vertex>;
+pub type StaticIndices = BindlessBuffer<u32>;
+pub type StaticTexture = DescriptorSet<SingleImageDescriptorValue>;
 
-pub struct ResourcesInfo {
-    pub vertices_info: ResCreateInfo<ContinuousBufferBuilder>,
-    pub indices_info: ResCreateInfo<ContinuousBufferBuilder>,
-    pub texture_info: ResCreateInfo<ContinuousImageBuilder>,
-}
-
-impl ResourcesInfo {
-    pub fn new(device: &Arc<Device>) -> Self {
-        Self {
-            vertices_info: Self::create_vertices_info(device),
-            indices_info: Self::create_indices_info(device),
-            texture_info: Self::create_texture_info(device),
-        }
-    }
-    fn create_indices_info(device: &Arc<Device>) -> ResCreateInfo<ContinuousBufferBuilder> {
-        let device_memory_properties = device.physical_device.memory_properties();
-        let mut buffer_builder = ContinuousBuffer::builder(&device);
-        buffer_builder.sharing_mode(SharingMode::EXCLUSIVE);
-        buffer_builder.size(1);
-        buffer_builder.usage(BufferUsageFlags::INDEX_BUFFER | BufferUsageFlags::TRANSFER_DST);
-        let index_buffer = buffer_builder.build().unwrap();
-        let index_buffer_memory_req = index_buffer.get_memory_requirements();
-        let memory_type = try_memory_type(
-            index_buffer_memory_req,
-            device_memory_properties,
-            None,
-            1024 * 1024 * 1024,
-            |memory_type| Some(memory_type.clone()),
-        )
-        .unwrap();
-        ResCreateInfo {
-            builder: buffer_builder,
-            memory_type,
-        }
-    }
-
-    fn create_vertices_info(device: &Arc<Device>) -> ResCreateInfo<ContinuousBufferBuilder> {
-        let device_memory_properties = device.physical_device.memory_properties();
-        let mut buffer_builder = ContinuousBuffer::builder(&device);
-        buffer_builder.sharing_mode(SharingMode::EXCLUSIVE);
-        buffer_builder.size(1);
-        buffer_builder.usage(BufferUsageFlags::VERTEX_BUFFER | BufferUsageFlags::TRANSFER_DST);
-        let vertices = buffer_builder.build().unwrap();
-        let vertices_buffer_memory_req = vertices.get_memory_requirements();
-        let memory_type = try_memory_type(
-            vertices_buffer_memory_req,
-            device_memory_properties,
-            None,
-            1024 * 1024 * 1024,
-            |memory_type| Some(memory_type.clone()),
-        )
-        .unwrap();
-        ResCreateInfo {
-            builder: buffer_builder,
-            memory_type,
-        }
-    }
-
-    fn create_texture_info(device: &Arc<Device>) -> ResCreateInfo<ContinuousImageBuilder> {
-        let device_memory_properties = device.physical_device.memory_properties();
-        let mut image_builder = ContinuousImage::builder(&device);
-        image_builder.image_type(ImageType::TYPE_2D);
-        image_builder.format(Format::R8G8B8A8_UNORM);
-        image_builder.extent(Extent3D {
-            width: 1,
-            height: 1,
-            depth: 1,
-        });
-        image_builder.mip_levels(1);
-        image_builder.array_layers(1);
-        image_builder.samples(SampleCountFlags::TYPE_1);
-        image_builder.tiling(ImageTiling::OPTIMAL);
-        image_builder.usage(ImageUsageFlags::SAMPLED | ImageUsageFlags::TRANSFER_DST);
-        image_builder.sharing_mode(SharingMode::EXCLUSIVE);
-        let texture_image = image_builder.build().unwrap();
-        let texture_image_memory_req = texture_image.get_memory_requirements();
-        let memory_type = try_memory_type(
-            texture_image_memory_req,
-            device_memory_properties,
-            None,
-            1024 * 1024 * 1024,
-            |memory_type| Some(memory_type.clone()),
-        )
-        .unwrap();
-        ResCreateInfo {
-            builder: image_builder,
-            memory_type,
-        }
-    }
-}
-
-impl<T: RenderingFunction> Renderer<T> {
+impl RenderDevice {
     pub fn create_vertices(
         &self,
-        data: &[(u64 /*size*/, Arc<dyn Fn(&mut [u8]) + Send + Sync>)],
-    ) -> Vec<Arc<BindlessBuffer>> {
-        self.render_device
-            .memory_allocator
-            .vertices_buffer
-            .allocate(data, &mut self.render_device.memory_allocator.queue.lock())
+        data: &[(usize /*len*/, Arc<dyn Fn(&mut [Vertex]) + Send + Sync>)],
+    ) -> Vec<Arc<StaticVertices>> {
+        self.memory_allocator
+            .static_vertices_buffer
+            .allocate(data, &mut self.memory_allocator.queue.lock())
     }
     pub fn create_indices(
         &self,
-        data: &[(u64 /*size*/, Arc<dyn Fn(&mut [u8]) + Send + Sync>)],
-    ) -> Vec<Arc<BindlessBuffer>> {
-        self.render_device
-            .memory_allocator
-            .indices_buffer
-            .allocate(data, &mut self.render_device.memory_allocator.queue.lock())
+        data: &[(usize /*len*/, Arc<dyn Fn(&mut [u32]) + Send + Sync>)],
+    ) -> Vec<Arc<StaticIndices>> {
+        self.memory_allocator
+            .static_indices_buffer
+            .allocate(data, &mut self.memory_allocator.queue.lock())
     }
     pub fn create_textures(
         &self,
         data: &[(Extent2D /*size*/, Arc<dyn Fn(&mut [u8]) + Send + Sync>)],
-    ) -> Vec<Arc<DescriptorSet<SingleImageDescriptorValue>>> {
-        let builder = self
-            .render_device
-            .memory_allocator
-            .resource_infos
-            .texture_info
-            .builder
-            .clone();
+    ) -> Vec<Arc<StaticTexture>> {
+        let device = &self.device;
+        // duplicated code
+        let mut builder = ContinuousImage::builder(device);
+        builder.image_type(ImageType::TYPE_2D);
+        builder.format(Format::R8G8B8A8_UNORM);
+        builder.extent(Extent3D {
+            width: 1,
+            height: 1,
+            depth: 1,
+        });
+        builder.mip_levels(1);
+        builder.array_layers(1);
+        builder.samples(SampleCountFlags::TYPE_1);
+        builder.tiling(ImageTiling::OPTIMAL);
+        builder.usage(ImageUsageFlags::SAMPLED | ImageUsageFlags::TRANSFER_DST);
+        builder.sharing_mode(SharingMode::EXCLUSIVE);
         let memory_type = &self
-            .render_device
             .memory_allocator
             .resource_infos
             .texture_info
@@ -182,12 +94,11 @@ impl<T: RenderingFunction> Renderer<T> {
             })
             .collect();
         let mut descriptor_sets = Vec::with_capacity(image_views.len());
-        self.render_device
-            .single_image_descriptor_set_layout
+        self.single_image_descriptor_set_layout
             .descriptor_pool_list
             .allocate(image_views.len() as _, &mut descriptor_sets)
             .unwrap();
-        let mut updatable = self.render_device.device.update_descriptor_sets();
+        let mut updatable = self.device.update_descriptor_sets();
         descriptor_sets
             .iter_mut()
             .enumerate()
@@ -220,10 +131,7 @@ impl<T: RenderingFunction> Renderer<T> {
             builder.extent(extent.clone().into());
             builder.build().unwrap()
         });
-        let allocator = self
-            .render_device
-            .memory_allocator
-            .get_block_based_allocator(memory_type);
+        let allocator = self.memory_allocator.get_block_based_allocator(memory_type);
         let mut images = allocator.par_allocate(it, Some(total_size)).unwrap();
         let updater = MemoryUpdater::default();
         images.iter_mut().enumerate().for_each(|(index, image)| {
@@ -242,7 +150,7 @@ impl<T: RenderingFunction> Renderer<T> {
                 data[index].1.clone(),
             )
         });
-        updater.update(&mut self.render_device.memory_allocator.queue.lock());
+        updater.update(&mut self.memory_allocator.queue.lock());
         images
     }
 }

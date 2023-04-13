@@ -10,7 +10,7 @@ tyleri-api = { path = "../tyleri-api" }
 derive_more = "0.99.17"
 rustc-hash = "1.1.0"
 parking_lot = "0.12.1"
-raw-window-handle = "0.3"
+raw-window-handle = "0.5"
 rayon = "1.5.3"
 dashmap = "5.4.0"
 crossbeam-queue = "0.3.8"

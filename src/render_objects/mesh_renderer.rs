@@ -3,6 +3,7 @@ use std::slice::from_raw_parts;
 use std::sync::Arc;
 
 use glam::Mat4;
+use tyleri_api::data_structure::vertices::Vertex;
 use tyleri_gpu_utils::memory::block_based_memory::bindless_buffer::BindlessBuffer;
 use yarvk::command::command_buffer::CommandBuffer;
 use yarvk::command::command_buffer::Level::SECONDARY;
@@ -24,16 +25,16 @@ struct MVP {
 
 pub struct MeshRenderer {
     // TODO maybe split vertices to three buffers?
-    vertices: Arc<BindlessBuffer>,
-    indices: Arc<BindlessBuffer>,
+    vertices: Arc<BindlessBuffer<Vertex>>,
+    indices: Arc<BindlessBuffer<u32>>,
     descriptor_set: Arc<DescriptorSet<SingleImageDescriptorValue>>,
     model: Mat4,
 }
 
 impl MeshRenderer {
     pub fn new(
-        vertices: Arc<BindlessBuffer>,
-        indices: Arc<BindlessBuffer>,
+        vertices: Arc<BindlessBuffer<Vertex>>,
+        indices: Arc<BindlessBuffer<u32>>,
         descriptor_set: Arc<DescriptorSet<SingleImageDescriptorValue>>,
     ) -> Self {
         Self {
@@ -43,10 +44,10 @@ impl MeshRenderer {
             model: Default::default(),
         }
     }
-    pub fn set_vertices(&mut self, vertices: Arc<BindlessBuffer>) {
+    pub fn set_vertices(&mut self, vertices: Arc<BindlessBuffer<Vertex>>) {
         self.vertices = vertices
     }
-    pub fn set_indices(&mut self, indices: Arc<BindlessBuffer>) {
+    pub fn set_indices(&mut self, indices: Arc<BindlessBuffer<u32>>) {
         self.indices = indices
     }
     pub fn set_texture(&mut self, texture: Arc<ImageView>) {
@@ -90,7 +91,7 @@ impl MeshRenderer {
             &[],
         );
         command_buffer.cmd_draw_indexed(
-            (self.indices.size / 4) as u32,
+            self.indices.len as u32,
             1,
             self.indices.offset as _,
             self.vertices.offset as _,

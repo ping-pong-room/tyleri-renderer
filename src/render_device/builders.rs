@@ -1,8 +1,8 @@
+use crossbeam_queue::SegQueue;
 use std::collections::BTreeMap;
 use std::ffi::CStr;
 use std::sync::Arc;
 
-use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 use tyleri_gpu_utils::queue::parallel_recording_queue::ParallelRecordingQueue;
 use yarvk::debug_utils_messenger::DebugUtilsMessengerCreateInfoEXT;
 use yarvk::device::{Device, DeviceBuilder, DeviceQueueCreateInfo};
@@ -24,19 +24,13 @@ use yarvk::{
 use crate::pipeline::single_image_descriptor_set_layout::SingleImageDescriptorLayout;
 use crate::render_device::RenderDevice;
 use crate::resource::resource_allocator::MemoryAllocator;
+use crate::WindowHandle;
 
 const DEFAULT_APP_NAME: &str = "Tyleri App";
 const DEFAULT_ENGINE_NAME: &str = "Tyleri Engine";
 const DEFAULT_DEPTH_IMAGE_FORMAT: Format = Format::D16_UNORM;
 const PRESENT_QUEUE_PRIORITY: f32 = 1.0;
 const TRANSFER_QUEUE_PRIORITY: f32 = 0.9;
-
-struct RawWindowHandleWrapper(RawWindowHandle);
-unsafe impl HasRawWindowHandle for RawWindowHandleWrapper {
-    fn raw_window_handle(&self) -> RawWindowHandle {
-        self.0
-    }
-}
 
 pub struct RenderDeviceBuilder {
     vulkan_application_name: &'static str,
@@ -46,7 +40,7 @@ pub struct RenderDeviceBuilder {
     // msaa_sample_counts: Option<SampleCountFlags>,
     depth_image_format: Format,
     pipeline_cache_data: Option<Vec<u8>>,
-    target_window_handles: Vec<RawWindowHandle>,
+    target_window_handles: Vec<WindowHandle>,
 }
 
 impl Default for RenderDeviceBuilder {
@@ -92,7 +86,7 @@ impl RenderDeviceBuilder {
         self.pipeline_cache_data = Some(data);
         self
     }
-    pub fn target_displays(mut self, handles: Vec<RawWindowHandle>) -> Self {
+    pub fn target_windows(mut self, handles: Vec<WindowHandle>) -> Self {
         self.target_window_handles = handles;
         self
     }
@@ -127,8 +121,8 @@ impl RenderDeviceBuilder {
                 .add_layer(layer)
                 .debug_utils_messenger_exts(vec![debug_utils_messenger_callback]);
         }
-        for handle in &self.target_window_handles {
-            for exts in enumerate_required_extensions(&RawWindowHandleWrapper(*handle)).unwrap() {
+        for window_handle in &self.target_window_handles {
+            for exts in enumerate_required_extensions(window_handle.display_handle).unwrap() {
                 instance_builder = instance_builder.add_extension(&exts);
             }
         }
@@ -201,7 +195,8 @@ impl RenderDeviceBuilder {
                 for window_handle in &self.target_window_handles {
                     let surface = Surface::get_physical_device_surface_support(
                         khr_surface_ext.clone(),
-                        &RawWindowHandleWrapper(*window_handle),
+                        window_handle.display_handle,
+                        window_handle.window_handle,
                         queue_family_properties,
                     );
                     match surface {
@@ -338,6 +333,9 @@ impl RenderDeviceBuilder {
         let instance = self.create_instance();
         let pdevice = self.create_physical_device(&instance);
         let (device, present_queue, transfer_queue) = self.create_device(&pdevice);
+        let present_queue_family = present_queue.queue_family_property.clone();
+        let present_queues = SegQueue::new();
+        present_queues.push(present_queue);
         // self.handle_msaa_sample_counts(&pdevice.get_physical_device_properties().limits);
         let default_sampler = self.create_sampler(&device);
         let pipeline_cache = self.create_pipeline_cache(&device);
@@ -346,7 +344,8 @@ impl RenderDeviceBuilder {
         RenderDevice {
             device,
             single_image_descriptor_set_layout,
-            present_queue,
+            present_queue_family,
+            present_queues,
             memory_allocator,
             pipeline_cache,
             depth_image_format: self.depth_image_format,
