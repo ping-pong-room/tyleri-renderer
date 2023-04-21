@@ -295,10 +295,6 @@ impl RenderingFunction for ForwardRenderingFunction {
             &mut secondary_command_buffers[0],
         );
         let cameras = render_details.cameras.as_slice();
-        // TODO warning in debug, and using log
-        if cameras.is_empty() {
-            println!("no cameras");
-        }
         for camera in cameras {
             let mesh_renderers = camera.get_and_order_meshes(render_details);
             secondary_command_buffers

@@ -32,6 +32,9 @@ impl RenderDevice {
         &self,
         data: &[(usize /*len*/, Arc<dyn Fn(&mut [Vertex]) + Send + Sync>)],
     ) -> Vec<Arc<StaticVertices>> {
+        if data.is_empty() {
+            return Vec::new();
+        }
         self.memory_allocator
             .static_vertices_buffer
             .allocate(data, &mut self.memory_allocator.queue.lock())
@@ -40,6 +43,9 @@ impl RenderDevice {
         &self,
         data: &[(usize /*len*/, Arc<dyn Fn(&mut [u32]) + Send + Sync>)],
     ) -> Vec<Arc<StaticIndices>> {
+        if data.is_empty() {
+            return Vec::new();
+        }
         self.memory_allocator
             .static_indices_buffer
             .allocate(data, &mut self.memory_allocator.queue.lock())
@@ -48,6 +54,9 @@ impl RenderDevice {
         &self,
         data: &[(Extent2D /*size*/, Arc<dyn Fn(&mut [u8]) + Send + Sync>)],
     ) -> Vec<Arc<StaticTexture>> {
+        if data.is_empty() {
+            return Vec::new();
+        }
         let device = &self.device;
         // duplicated code
         let mut builder = ContinuousImage::builder(device);
