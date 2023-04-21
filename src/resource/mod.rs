@@ -30,7 +30,10 @@ pub type StaticTexture = DescriptorSet<SingleImageDescriptorValue>;
 impl RenderDevice {
     pub fn create_vertices(
         &self,
-        data: &[(usize /*len*/, Arc<dyn Fn(&mut [Vertex]) + Send + Sync>)],
+        data: Vec<(
+            usize, /*len*/
+            Box<dyn FnOnce(&mut [Vertex]) + Send + Sync>,
+        )>,
     ) -> Vec<Arc<StaticVertices>> {
         if data.is_empty() {
             return Vec::new();
@@ -41,7 +44,10 @@ impl RenderDevice {
     }
     pub fn create_indices(
         &self,
-        data: &[(usize /*len*/, Arc<dyn Fn(&mut [u32]) + Send + Sync>)],
+        data: Vec<(
+            usize, /*len*/
+            Box<dyn FnOnce(&mut [u32]) + Send + Sync>,
+        )>,
     ) -> Vec<Arc<StaticIndices>> {
         if data.is_empty() {
             return Vec::new();
@@ -52,7 +58,10 @@ impl RenderDevice {
     }
     pub fn create_textures(
         &self,
-        data: &[(Extent2D /*size*/, Arc<dyn Fn(&mut [u8]) + Send + Sync>)],
+        data: Vec<(
+            Extent2D, /*size*/
+            Box<dyn FnOnce(&mut [u8]) + Send + Sync>,
+        )>,
     ) -> Vec<Arc<StaticTexture>> {
         if data.is_empty() {
             return Vec::new();
@@ -129,10 +138,10 @@ impl RenderDevice {
         &self,
         mut builder: ContinuousImageBuilder,
         memory_type: &MemoryType,
-        data: &[(Extent2D, Arc<dyn Fn(&mut [u8]) + Send + Sync>)],
+        data: Vec<(Extent2D, Box<dyn FnOnce(&mut [u8]) + Send + Sync>)>,
     ) -> Vec<Arc<IMemBakImg>> {
         let mut total_size = 0;
-        for (extent, _) in data {
+        for (extent, _) in data.as_slice() {
             total_size +=
                 extent.width as u64 * extent.height as u64 * builder.get_format().format_size();
         }
@@ -141,24 +150,28 @@ impl RenderDevice {
             builder.build().unwrap()
         });
         let allocator = self.memory_allocator.get_block_based_allocator(memory_type);
-        let mut images = allocator.par_allocate(it, Some(total_size)).unwrap();
+        let images = allocator.par_allocate(it, Some(total_size)).unwrap();
         let updater = MemoryUpdater::default();
-        images.iter_mut().enumerate().for_each(|(index, image)| {
-            updater.add_image(
-                image,
-                builder.get_format().format_size(),
-                ImageSubresourceLayers::builder()
-                    .aspect_mask(ImageAspectFlags::COLOR)
-                    .layer_count(1)
-                    .build(),
-                Offset3D::default(),
-                data[index].0.into(),
-                AccessFlags::SHADER_READ,
-                ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                PipelineStageFlag::FragmentShader.into(),
-                data[index].1.clone(),
-            )
-        });
+        images
+            .iter()
+            .cloned()
+            .zip(data)
+            .for_each(|(image, (extent, f))| {
+                updater.add_image(
+                    &image as _,
+                    builder.get_format().format_size(),
+                    ImageSubresourceLayers::builder()
+                        .aspect_mask(ImageAspectFlags::COLOR)
+                        .layer_count(1)
+                        .build(),
+                    Offset3D::default(),
+                    extent.into(),
+                    AccessFlags::SHADER_READ,
+                    ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                    PipelineStageFlag::FragmentShader.into(),
+                    f,
+                )
+            });
         updater.update(&mut self.memory_allocator.queue.lock());
         images
     }
