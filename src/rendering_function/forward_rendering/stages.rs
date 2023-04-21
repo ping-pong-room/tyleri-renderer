@@ -14,7 +14,6 @@ use crate::render_objects::camera::Camera;
 use crate::render_objects::mesh_renderer::MeshRenderer;
 use crate::render_objects::ParallelGroup;
 use crate::render_scene::RenderResources;
-use crate::render_window::RenderWindow;
 use crate::rendering_function::forward_rendering::ForwardRenderingFunction;
 
 impl ForwardRenderingFunction {

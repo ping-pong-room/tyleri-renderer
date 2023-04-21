@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use rayon::iter::IntoParallelIterator;
 use rayon::iter::ParallelIterator;
-use rustc_hash::FxHashMap;
 use tyleri_api::data_structure::vertices::UIVertex;
 use tyleri_gpu_utils::memory::variable_length_buffer::VariableLengthBuffer;
 use yarvk::command::command_buffer::Level::{PRIMARY, SECONDARY};
@@ -16,8 +15,8 @@ use yarvk::semaphore::Semaphore;
 
 use crate::render_device::RenderDevice;
 use crate::render_objects::camera::Camera;
-use crate::render_objects::render_group::RenderGroup;
-use crate::render_objects::ui::{UIElement, UI};
+use crate::render_objects::mesh_renderer::MeshRenderer;
+use crate::render_objects::ui::UIElement;
 
 const DEFAULT_VERTICES_BUFFER_LEN: usize = 2 * 1024;
 const DEFAULT_INDICES_BUFFER_LEN: usize = 1024;
@@ -66,7 +65,7 @@ impl RecordResources {
 pub struct RenderResources {
     pub(crate) ui_vertices: Arc<VariableLengthBuffer<UIVertex>>,
     pub(crate) ui_indices: Arc<VariableLengthBuffer<u32>>,
-    pub(crate) render_group: FxHashMap<usize, RenderGroup>,
+    pub(crate) mesh_renderers: Vec<Arc<MeshRenderer>>,
     pub(crate) cameras: Vec<Camera>,
     pub(crate) ui: Vec<UIElement>,
 }
@@ -101,14 +100,10 @@ impl RenderResources {
                 .usage,
             DEFAULT_INDICES_BUFFER_LEN,
         ));
-        let render_group = (0..rayon::current_num_threads())
-            .into_iter()
-            .map(|index| (index, RenderGroup::new()))
-            .collect();
         Self {
             ui_vertices,
             ui_indices: ui_dices,
-            render_group,
+            mesh_renderers: vec![],
             cameras: vec![],
             ui: Default::default(),
         }
@@ -121,7 +116,6 @@ impl RenderResources {
             .expect("internal error: vertex buffer is holding by others");
         ui_vertices.clear();
         self.cameras.clear();
-        self.render_group.clear();
     }
 }
 

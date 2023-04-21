@@ -1,6 +1,5 @@
 pub mod camera;
 pub mod mesh_renderer;
-pub mod render_group;
 pub mod ui;
 
 pub struct ParallelGroup<T> {
