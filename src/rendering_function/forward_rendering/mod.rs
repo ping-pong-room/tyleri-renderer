@@ -296,7 +296,7 @@ impl RenderingFunction for ForwardRenderingFunction {
         );
         let cameras = render_details.cameras.as_slice();
         for camera in cameras {
-            let mesh_renderers = camera.get_and_order_meshes(render_details);
+            let mesh_renderers = camera.get_and_order_meshes();
             secondary_command_buffers
                 .par_iter_mut()
                 .enumerate()

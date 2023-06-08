@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use tyleri_api::data_structure::vertices::Vertex;
+use tyleri_gpu_utils::descriptor::single_image_descriptor_set_layout::SingleImageDescriptorValue;
 use tyleri_gpu_utils::image::format::FormatSize;
 use tyleri_gpu_utils::memory::block_based_memory::bindless_buffer::BindlessBuffer;
 use tyleri_gpu_utils::memory::memory_updater::MemoryUpdater;
@@ -17,15 +18,14 @@ use yarvk::{
     ImageType, ImageUsageFlags, Offset3D, SampleCountFlags,
 };
 
-use crate::pipeline::single_image_descriptor_set_layout::SingleImageDescriptorValue;
 use crate::render_device::RenderDevice;
 
 pub mod resource_allocator;
 mod resource_info;
 
-pub type StaticVertices = BindlessBuffer<Vertex>;
-pub type StaticIndices = BindlessBuffer<u32>;
-pub type StaticTexture = DescriptorSet<SingleImageDescriptorValue>;
+pub type StaticVertices = Arc<BindlessBuffer<Vertex>>;
+pub type StaticIndices = Arc<BindlessBuffer<u32>>;
+pub type StaticTexture = Arc<DescriptorSet<SingleImageDescriptorValue>>;
 
 impl RenderDevice {
     pub fn create_vertices(
@@ -34,7 +34,7 @@ impl RenderDevice {
             usize, /*len*/
             Box<dyn FnOnce(&mut [Vertex]) + Send + Sync>,
         )>,
-    ) -> Vec<Arc<StaticVertices>> {
+    ) -> Vec<StaticVertices> {
         if data.is_empty() {
             return Vec::new();
         }
@@ -48,7 +48,7 @@ impl RenderDevice {
             usize, /*len*/
             Box<dyn FnOnce(&mut [u32]) + Send + Sync>,
         )>,
-    ) -> Vec<Arc<StaticIndices>> {
+    ) -> Vec<StaticIndices> {
         if data.is_empty() {
             return Vec::new();
         }
@@ -62,7 +62,7 @@ impl RenderDevice {
             Extent2D, /*size*/
             Box<dyn FnOnce(&mut [u8]) + Send + Sync>,
         )>,
-    ) -> Vec<Arc<StaticTexture>> {
+    ) -> Vec<StaticTexture> {
         if data.is_empty() {
             return Vec::new();
         }

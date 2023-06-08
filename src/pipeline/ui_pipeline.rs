@@ -2,6 +2,7 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use tyleri_api::data_structure::vertices::{IVertex, UIVertex};
+use tyleri_gpu_utils::descriptor::single_image_descriptor_set_layout::SingleImageDescriptorLayout;
 use yarvk::pipeline::color_blend_state::{
     BlendFactor, PipelineColorBlendAttachmentState, PipelineColorBlendStateCreateInfo,
 };
@@ -19,8 +20,6 @@ use yarvk::{
     read_spv, ColorComponentFlags, CompareOp, FrontFace, SampleCountFlags, StencilOp,
     StencilOpState, VertexInputRate,
 };
-
-use crate::pipeline::single_image_descriptor_set_layout::SingleImageDescriptorLayout;
 
 pub struct UIPipeline {
     pub pipeline: Arc<Pipeline>,
@@ -57,7 +56,7 @@ impl UIPipeline {
                 PushConstantRange::builder()
                     .add_stage(ShaderStage::Vertex)
                     .offset(0)
-                    .size(128) // all devices guaranteed to have 128 bytes
+                    .size(8)
                     .build(),
             )
             .build()

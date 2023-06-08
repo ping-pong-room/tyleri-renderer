@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use tyleri_api::data_structure::vertices::UIVertex;
+use tyleri_gpu_utils::descriptor::single_image_descriptor_set_layout::SingleImageDescriptorValue;
 
 use yarvk::command::command_buffer::CommandBuffer;
 use yarvk::command::command_buffer::Level::SECONDARY;
@@ -9,7 +10,6 @@ use yarvk::descriptor_set::descriptor_set::DescriptorSet;
 use yarvk::pipeline::Pipeline;
 use yarvk::PipelineBindPoint;
 
-use crate::pipeline::single_image_descriptor_set_layout::SingleImageDescriptorValue;
 use crate::render_scene::RenderScene;
 
 pub(crate) struct UIElement {

@@ -15,7 +15,6 @@ use yarvk::semaphore::Semaphore;
 
 use crate::render_device::RenderDevice;
 use crate::render_objects::camera::Camera;
-use crate::render_objects::mesh_renderer::MeshRenderer;
 use crate::render_objects::ui::UIElement;
 
 const DEFAULT_VERTICES_BUFFER_LEN: usize = 2 * 1024;
@@ -65,7 +64,6 @@ impl RecordResources {
 pub struct RenderResources {
     pub(crate) ui_vertices: Arc<VariableLengthBuffer<UIVertex>>,
     pub(crate) ui_indices: Arc<VariableLengthBuffer<u32>>,
-    pub(crate) mesh_renderers: Vec<Arc<MeshRenderer>>,
     pub(crate) cameras: Vec<Camera>,
     pub(crate) ui: Vec<UIElement>,
 }
@@ -103,7 +101,6 @@ impl RenderResources {
         Self {
             ui_vertices,
             ui_indices: ui_dices,
-            mesh_renderers: vec![],
             cameras: vec![],
             ui: Default::default(),
         }

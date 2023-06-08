@@ -22,8 +22,8 @@ impl ForwardRenderingFunction {
         camera: &Camera,
         command_buffer: &mut CommandBuffer<{ SECONDARY }, { RECORDING }, { INSIDE }>,
     ) {
-        let viewport = camera.get_viewport();
-        let scissor = camera.get_scissor();
+        let viewport = &camera.viewport;
+        let scissor = &camera.scissor;
         // set viewport and scissors
         command_buffer.cmd_set_viewport(viewport);
         command_buffer.cmd_set_scissor(scissor);
@@ -73,7 +73,7 @@ impl ForwardRenderingFunction {
             )
         };
         command_buffer.cmd_push_constants(
-            &&self.common_pipeline.pipeline.pipeline_layout.clone(),
+            &self.ui_pipeline.pipeline.pipeline_layout.clone(),
             &ShaderStage::Vertex,
             0,
             push_constant,
@@ -81,7 +81,7 @@ impl ForwardRenderingFunction {
         command_buffer.cmd_bind_vertex_buffers(0, [ui_vertices.clone() as _], &[0]);
         command_buffer.cmd_bind_index_buffer(ui_indices.clone() as _, 0, IndexType::UINT32);
         ui_elements.iter().for_each(|ui_element| {
-            ui_element.renderer_ui(&self.common_pipeline.pipeline, command_buffer)
+            ui_element.renderer_ui(&self.ui_pipeline.pipeline, command_buffer)
         })
     }
     pub(super) fn on_render_meshes(
@@ -92,11 +92,14 @@ impl ForwardRenderingFunction {
         thread_index: usize,
         command_buffer: &mut CommandBuffer<{ SECONDARY }, { RECORDING }, { INSIDE }>,
     ) {
-        let view_matrix = camera.get_view_matrix();
-        let projection_matrix = camera.get_projection_matrix();
         let meshes = parallel_meshes
             .get_group_by_thread(thread_index)
             .expect("internal error: no group in thread index");
+        if meshes.is_empty() {
+            return;
+        }
+        let view_matrix = &camera.view_matrix;
+        let projection_matrix = &camera.get_projection_matrix();
         command_buffer.cmd_bind_pipeline(
             PipelineBindPoint::GRAPHICS,
             self.common_pipeline.pipeline.clone(),

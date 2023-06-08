@@ -2,6 +2,7 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use tyleri_api::data_structure::vertices::{IVertex, Vertex};
+use tyleri_gpu_utils::descriptor::single_image_descriptor_set_layout::SingleImageDescriptorLayout;
 use yarvk::pipeline::color_blend_state::{
     BlendFactor, PipelineColorBlendAttachmentState, PipelineColorBlendStateCreateInfo,
 };
@@ -20,8 +21,6 @@ use yarvk::{
     read_spv, BlendOp, ColorComponentFlags, CompareOp, FrontFace, SampleCountFlags, StencilOp,
     VertexInputRate,
 };
-
-use crate::pipeline::single_image_descriptor_set_layout::SingleImageDescriptorLayout;
 
 pub struct CommonPipeline {
     pub pipeline: Arc<Pipeline>,

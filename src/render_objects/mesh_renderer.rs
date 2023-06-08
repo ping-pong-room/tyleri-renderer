@@ -4,18 +4,16 @@ use std::sync::Arc;
 
 use glam::Mat4;
 use tyleri_api::data_structure::vertices::Vertex;
+use tyleri_gpu_utils::descriptor::single_image_descriptor_set_layout::SingleImageDescriptorValue;
 use tyleri_gpu_utils::memory::block_based_memory::bindless_buffer::BindlessBuffer;
 use yarvk::command::command_buffer::CommandBuffer;
 use yarvk::command::command_buffer::Level::SECONDARY;
 use yarvk::command::command_buffer::RenderPassScope::INSIDE;
 use yarvk::command::command_buffer::State::RECORDING;
 use yarvk::descriptor_set::descriptor_set::DescriptorSet;
-use yarvk::image_view::ImageView;
 use yarvk::pipeline::shader_stage::ShaderStage;
 use yarvk::pipeline::Pipeline;
-use yarvk::{ImageLayout, PipelineBindPoint};
-
-use crate::pipeline::single_image_descriptor_set_layout::SingleImageDescriptorValue;
+use yarvk::PipelineBindPoint;
 
 #[repr(C)]
 struct MVP {
@@ -25,10 +23,10 @@ struct MVP {
 
 pub struct MeshRenderer {
     // TODO maybe split vertices to three buffers?
-    vertices: Arc<BindlessBuffer<Vertex>>,
-    indices: Arc<BindlessBuffer<u32>>,
-    descriptor_set: Arc<DescriptorSet<SingleImageDescriptorValue>>,
-    model: Mat4,
+    pub vertices: Arc<BindlessBuffer<Vertex>>,
+    pub indices: Arc<BindlessBuffer<u32>>,
+    pub descriptor_set: Arc<DescriptorSet<SingleImageDescriptorValue>>,
+    pub model: Mat4,
 }
 
 impl MeshRenderer {
@@ -43,25 +41,6 @@ impl MeshRenderer {
             descriptor_set,
             model: Default::default(),
         }
-    }
-    pub fn set_vertices(&mut self, vertices: Arc<BindlessBuffer<Vertex>>) {
-        self.vertices = vertices
-    }
-    pub fn set_indices(&mut self, indices: Arc<BindlessBuffer<u32>>) {
-        self.indices = indices
-    }
-    pub fn set_texture(&mut self, texture: Arc<ImageView>) {
-        let mut updatable = self.descriptor_set.device.update_descriptor_sets();
-        // Tried to batch update descriptors, but it's way to complicated, and need locks,
-        // don't know if worth it
-        let descriptor_set =
-            Arc::get_mut(&mut self.descriptor_set).expect("descriptor set is holding by others");
-        updatable.add(descriptor_set, |_| SingleImageDescriptorValue {
-            t0: [(texture.clone(), ImageLayout::SHADER_READ_ONLY_OPTIMAL)],
-        })
-    }
-    pub fn set_model_matrix(&mut self, model: Mat4) {
-        self.model = model
     }
     pub fn renderer_mesh(
         &self,

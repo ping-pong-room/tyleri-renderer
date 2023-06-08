@@ -2,6 +2,7 @@ use crossbeam_queue::SegQueue;
 use std::collections::BTreeMap;
 use std::ffi::CStr;
 use std::sync::Arc;
+use tyleri_gpu_utils::descriptor::single_image_descriptor_set_layout::SingleImageDescriptorLayout;
 
 use tyleri_gpu_utils::queue::parallel_recording_queue::ParallelRecordingQueue;
 use yarvk::debug_utils_messenger::DebugUtilsMessengerCreateInfoEXT;
@@ -21,7 +22,6 @@ use yarvk::{
     QueueFlags, SamplerAddressMode, SamplerMipmapMode,
 };
 
-use crate::pipeline::single_image_descriptor_set_layout::SingleImageDescriptorLayout;
 use crate::render_device::RenderDevice;
 use crate::resource::resource_allocator::MemoryAllocator;
 use crate::WindowHandle;
